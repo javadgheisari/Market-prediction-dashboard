@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam, SGD
 
-address = 'forex-data/new/EURUSD_6h.csv'
+address = 'data/new/IBM.csv'
 df = pd.read_csv(address)
 # coin_name = address.split("/")[1].split(".")[0].split("_")[1]
 coin_name = address.split("/")[2].split(".")[0]
@@ -179,7 +179,7 @@ window = 60
 df_copy = df.iloc[:, 1:2][1:].values
 
 # predict_days = int(input("predict_days (max:30 D):"))
-predict_days = 10
+predict_days = 24
 
 for j in range(predict_days):
     df_ = np.vstack((df_copy, pred_))
@@ -211,16 +211,16 @@ prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1
 df_date = df[['Date']]
 # print(df_date)
 for h in range(predict_days):
-    df_date_add = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=6)
-    df_date_add = pd.DataFrame([df_date_add.strftime("%Y-%m-%d")], columns=['Date'])
+    df_date_add = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=2)
+    df_date_add = pd.DataFrame([df_date_add.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
     df_date = pd.concat([df_date, df_date_add])
 df_date = df_date.reset_index(drop=True)
 
 
 plt.figure(figsize=(20,7))
-plt.plot(df['Date'].values[num_shape+20:], df_volume[num_shape+20:], color = 'red', label = f'Real {coin_name} Price')
-plt.plot(df_date['Date'][-prediction_full_new.shape[0]+20:].values, prediction_full_new[20:], color = 'blue', label = f'Predicted {coin_name} Price')
-plt.xticks(np.arange(0,df[num_shape:].shape[0],8))
+plt.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
+plt.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
+plt.xticks(np.arange(0,df[num_shape:].shape[0],12))
 plt.title(f'{coin_name} Price Prediction')
 plt.xlabel('Date')
 plt.ylabel('Price ($)')

@@ -12,7 +12,7 @@ from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam, SGD
 from keras.models import load_model
 
-address = 'forex-data/new/GBP-USD.csv'
+address = 'data/new/IBM.csv'
 df = pd.read_csv(address)
 # coin_name = address.split("/")[1].split(".")[0].split("_")[1]
 coin_name = address.split("/")[2].split(".")[0]
@@ -78,30 +78,30 @@ y_train = np.stack(y_train)
 
 ########### GRU ################
 
-# # The GRU architecture
-# modelGRU = Sequential()
+# The GRU architecture
+modelGRU = Sequential()
 
-# modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-# modelGRU.add(Dropout(0.2))
+modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
+modelGRU.add(Dropout(0.2))
 
-# modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-# modelGRU.add(Dropout(0.2))
+modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
+modelGRU.add(Dropout(0.2))
 
-# modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-# modelGRU.add(Dropout(0.2))
+modelGRU.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
+modelGRU.add(Dropout(0.2))
 
-# modelGRU.add(GRU(units=50))
-# modelGRU.add(Dropout(0.2))
+modelGRU.add(GRU(units=50))
+modelGRU.add(Dropout(0.2))
 
-# modelGRU.add(Dense(units=1))
-# modelGRU.summary()
+modelGRU.add(Dense(units=1))
+modelGRU.summary()
 
-# modelGRU.compile(optimizer='adam', loss='mean_squared_error')
-# modelGRU.fit(X_train, y_train, epochs=50, batch_size=128)
+modelGRU.compile(optimizer='adam', loss='mean_squared_error')
+modelGRU.fit(X_train, y_train, epochs=15, batch_size=128)
 
 # modelGRU.save("models/")
 
-modelGRU = load_model('models/')
+# modelGRU = load_model('models/')
 
 df_volume = np.vstack((train, test))
 
@@ -158,7 +158,8 @@ prediction_full = []
 window = 60
 df_copy = df.iloc[:, 1:2][1:].values
 
-predict_days = 10
+# for 12*2 = 2 days predict
+predict_days = 24
 
 for j in range(predict_days):
     df_ = np.vstack((df_copy, pred_))
@@ -189,17 +190,17 @@ prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1
 df_date = df[['Date']]
 
 for h in range(predict_days):
-    kk = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(days=1)
-    kk = pd.DataFrame([kk.strftime("%Y-%m-%d")], columns=['Date'])
+    kk = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=2)
+    kk = pd.DataFrame([kk.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
     df_date = pd.concat([df_date, kk])
 df_date = df_date.reset_index(drop=True)
 
 
 
 plt.figure(figsize=(20,7))
-plt.plot(df['Date'].values[num_shape+20:], df_volume[num_shape+20:], color = 'red', label = f'Real {coin_name} Price')
-plt.plot(df_date['Date'][-prediction_full_new.shape[0]+20:].values, prediction_full_new[20:], color = 'blue', label = f'Predicted {coin_name} Price')
-plt.xticks(np.arange(0,df_date[num_shape:].shape[0],7))
+plt.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
+plt.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
+plt.xticks(np.arange(0,df_date[num_shape:].shape[0],12))
 plt.title(f'{coin_name} Price Prediction')
 plt.xlabel('Date')
 plt.ylabel('Price ($)')
