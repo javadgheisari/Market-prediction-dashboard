@@ -58,12 +58,11 @@ class PredictView(View):
             train = df.iloc[1::2, 1:2].values
             test = df.iloc[::2, 1:2].values
 
-
+            # computes the minimum and maximum values of the data and scales the data accordingly
             sc = MinMaxScaler(feature_range = (0, 1))
             train_scaled = sc.fit_transform(train)
 
             X_train = []
-
             #Price on next day
             y_train = []
 
@@ -76,8 +75,14 @@ class PredictView(View):
                     y_train.append(train_scaled[i, 0])
                 except:
                     y_train.append(train_scaled[i-1, 0])
+
+            # Stack the input sequences X_train and target values y_train to convert them into numpy arrays
             X_train = np.stack(X_train)
             y_train = np.stack(y_train)
+
+            # The resulting X_train and y_train sequences will be used to train the LSTM model for time series prediction.
+            # Each X_train sequence represents a window of previous time steps,
+            # and the corresponding y_train value represents the target value to be predicted for the next time step.
             
             try:
                 model = load_model(f"D:/umz/دروس/ترم8/Project/mysite/dashboard/models/{model_name}/{symbol_name}/")
@@ -85,6 +90,11 @@ class PredictView(View):
             except OSError:
 
                 if model_name == "lstm":
+
+                    # The LSTM layers in the model are stacked on top of each other,
+                    # allowing the model to learn hierarchical representations of the input data.
+                    # The dropout layers help prevent overfitting by randomly setting a fraction of the input units
+                    # to 0 during training.
 
                     # Initializing the Recurrent Neural Network
                     model = Sequential()
@@ -146,9 +156,11 @@ class PredictView(View):
             df_volume = np.vstack((train, test))
 
             inputs = df_volume[df_volume.shape[0] - test.shape[0] - window:]
+            # Reshape the inputs array to have a single column
             inputs = inputs.reshape(-1,1)
             inputs = sc.transform(inputs)
 
+            # number of samples available for testing
             num_2 = df_volume.shape[0] - num_shape + window
 
             X_test = []
@@ -211,13 +223,14 @@ class PredictView(View):
                 X_test_ = np.stack(X_test_2)
                 predict_ = model.predict(X_test_)
                 pred_ = sc.inverse_transform(predict_)
+                # Append the last predicted value (pred_[-1][0])
                 prediction_full.append(pred_[-1][0])
                 df_copy = df_[j:]
 
 
             prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1)))
 
-
+            # concat predicted date to dates
             df_date = df[['Date']]
             # print(df_date)
             for h in range(predict_days):
