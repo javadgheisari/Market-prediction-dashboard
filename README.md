@@ -10,4 +10,4 @@ prediction app market like Forex, Crypto and Stocks (United States America)
 2) Gru
 
 #### Web Framework:
-Django
+ - Django
