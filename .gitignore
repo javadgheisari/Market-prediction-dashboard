@@ -1,7 +1,14 @@
 /venv
 /data
-/code/.vscode
-/code/crypto-data
-/code/forex-data
-/code/models
-/code/data
+# /code/.vscode
+# /code/crypto-data
+# /code/forex-data
+# /code/models
+# /code/data
+# /code/__pycache__
+/code
+/mysite/db.sqlite3
+/mysite/mysite/__pycache__
+/mysite/dashboard/__pycache__
+/mysite/dashboard/migrations
+/mysite/dashboard/models

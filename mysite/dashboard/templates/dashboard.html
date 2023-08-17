@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% comment %} {% load static %} {% endcomment %}
+
+{% comment %} {% block link %}
+    <link rel="stylesheet" href="{% static 'styles.css' %}">
+{% endblock %} {% endcomment %}
+
+{% block content %}
+    <div class="py-5 text-center row">
+        <div class="col-md-4">
+            <h4 class="text-light pb-2"> Forex </h4>
+            <hr class="text-light w-75" style="margin: 0 auto;">
+            <ul class="list-unstyled pt-4">
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='EUR' %}">EUR</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='GBP' %}">GBP</a></li>
+
+            </ul>
+        </div>
+        <div class="col-md-4">
+            <h4 class="text-light pb-2"> Crypto </h4>
+            <hr class="text-light w-75" style="margin: 0 auto;">
+            <ul class="list-unstyled pt-4">
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='ADA' %}">ADA</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='BTC' %}">BTC</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='ETH' %}">ETH</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='LNK' %}">LNK</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='LTC' %}">LTC</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='MAT' %}">MAT</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='TRX' %}">TRX</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='UNI' %}">UNI</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XAG' %}">XAG</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XAU' %}">XAU</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XLM' %}">XLM</a></li>
+            </ul>
+        </div>
+        <div class="col-md-4">
+            <h4 class="text-light pb-2"> Stocks (US) </h4>
+            <hr class="text-light w-75" style="margin: 0 auto;">
+            <ul class="list-unstyled pt-4">
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='AAPL' %}">AAPL</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='AMZN' %}">AMZN</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='GOOGL' %}">GOOGL</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='IBM' %}">IBM</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='INTC' %}">INTC</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='NFLX' %}">NFLX</a></li>
+                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='TSLA' %}">TSLA</a></li>
+            </ul>
+        </div>
+    </div>
+
+{% endblock %}
