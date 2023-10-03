@@ -59,21 +59,27 @@ class PredictView(View):
             test = df.iloc[::2, 1:2].values
 
             # computes the minimum and maximum values of the data and scales the data accordingly
+            # the feature range is set to (0, 1)
             sc = MinMaxScaler(feature_range = (0, 1))
+            # computes the minimum and maximum values of the data and scales the data accordingly
             train_scaled = sc.fit_transform(train)
 
             X_train = []
             #Price on next day
             y_train = []
 
+            # window represents the number of previous time steps (or days) to consider as input for predicting the next time step.
             window = 60
 
             for i in range(window, num_shape):
+                # `train_scaled[i-window:i, 0]` selects the previous `window` number of values from the `train_scaled` data for creating the input sequence.
+                # `np.reshape` is used to reshape the input sequence to `(window, 1)` to match the expected input shape of the LSTM model.
                 X_train_ = np.reshape(train_scaled[i-window:i, 0], (window, 1))
                 X_train.append(X_train_)
                 try:
                     y_train.append(train_scaled[i, 0])
                 except:
+                    # if it is not available, the previous time step's value `train_scaled[i-1, 0]` is used
                     y_train.append(train_scaled[i-1, 0])
 
             # Stack the input sequences X_train and target values y_train to convert them into numpy arrays
@@ -152,9 +158,10 @@ class PredictView(View):
                 model.save(f"D:/umz/دروس/ترم8/Project/mysite/dashboard/models/{model_name}/{symbol_name}/")
 
 
-
+            #--- Scaling the testing data and preparing input sequences for prediction
             df_volume = np.vstack((train, test))
 
+            # Select the portion of df_volume that corresponds to the inputs for testing
             inputs = df_volume[df_volume.shape[0] - test.shape[0] - window:]
             # Reshape the inputs array to have a single column
             inputs = inputs.reshape(-1,1)
@@ -165,6 +172,7 @@ class PredictView(View):
 
             X_test = []
 
+            # Each input sequence is created by reshaping a portion of the inputs data.
             for i in range(window, num_2):
                 X_test_ = np.reshape(inputs[i-window:i, 0], (window, 1))
                 X_test.append(X_test_)
@@ -196,6 +204,7 @@ class PredictView(View):
             print("RMSE:", np.sqrt(np.mean(diff**2)))
 
             # n day predict
+            # Copy the last predicted value
             pred_ = predict[-1].copy()
             prediction_full = []
             window = 60
@@ -247,7 +256,7 @@ class PredictView(View):
             plt.title(f'{coin_name} Price Prediction')
             plt.xlabel('Date')
             plt.ylabel('Price ($)')
-            # plt.legend()
+            plt.legend()
             # plt.show()
 
             # # Generate the plot
