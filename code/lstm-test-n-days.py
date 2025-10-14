@@ -10,14 +10,16 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import train_test_split
 from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam, SGD
-
+from pathlib import Path
+from easygui import fileopenbox
 # from attention_layer import Attention
 
-address = 'data/new/IBM.csv'
+address = fileopenbox(title="choose csv file")
+# address = str(Path.cwd()) + '/code/data/forex/EUR-USD.csv'
 df = pd.read_csv(address)
 # coin_name = address.split("/")[1].split(".")[0].split("_")[1]
-coin_name = address.split("/")[2].split(".")[0]
-df = df.sort_values('Date').reset_index(drop=True)
+coin_name = address.split("/")[-1].split(".")[0]
+df = df.sort_values('Asia/Tehran').reset_index(drop=True)
 
 df.head()
 
@@ -25,18 +27,18 @@ df.head()
 
 df.shape
 
-# for date in df['Date']:
+# for date in df['Asia/Tehran']:
 #     df = df.replace(date,date[:10])
     # print(date)
-# df.replace(df['Date'][0],'sfsf')
-# print(df['Date'])
+# df.replace(df['Asia/Tehran'][0],'sfsf')
+# print(df['Asia/Tehran'])
 
 df['Close'] = df['Close'].astype(float)
 
 # plt.figure(figsize=(20,7))
-# plt.plot(df['Date'].values, df['Close'].values, label = 'Aave Stock Price', color = 'red')
+# plt.plot(df['Asia/Tehran'].values, df['Close'].values, label = 'Aave Stock Price', color = 'red')
 # plt.xticks(np.arange(0,df.shape[0],20))
-# plt.xlabel('Date')
+# plt.xlabel('Asia/Tehran')
 # plt.ylabel('Close ($)')
 # plt.legend()
 # plt.show()
@@ -109,7 +111,7 @@ model.summary()
 
 
 model.compile(optimizer = 'adam', loss = 'mean_squared_error')
-model.fit(X_train, y_train, epochs = 10, batch_size = 128);
+model.fit(X_train, y_train, epochs = 200, batch_size = 128);
 
 # model.save("GBP-USD-lstm-model/")
 
@@ -168,11 +170,11 @@ print("RMSE:", np.sqrt(np.mean(diff**2)))
 
 # plt.figure(figsize=(20,7))
 # # print(df_volume[200:])
-# plt.plot(df['Date'].values[num_shape:], df_volume[num_shape:], color = 'red', label = 'Real Aave Price')
-# plt.plot(df['Date'][-predict.shape[0]:].values, predict, color = 'blue', label = 'Predicted Aave Price')
+# plt.plot(df['Asia/Tehran'].values[num_shape:], df_volume[num_shape:], color = 'red', label = 'Real Aave Price')
+# plt.plot(df['Asia/Tehran'][-predict.shape[0]:].values, predict, color = 'blue', label = 'Predicted Aave Price')
 # plt.xticks(np.arange(0,df[num_shape+(round(num_shape*0.1)):].shape[0],7))
 # plt.title('Bitcoin Price Prediction')
-# plt.xlabel('Date')
+# plt.xlabel('Asia/Tehran')
 # plt.ylabel('Price ($)')
 # plt.legend()
 # plt.show()
@@ -214,21 +216,21 @@ for j in range(predict_days):
 prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1)))
 
 
-df_date = df[['Date']]
+df_date = df[['Asia/Tehran']]
 # print(df_date)
 for h in range(predict_days):
-    df_date_add = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=2)
-    df_date_add = pd.DataFrame([df_date_add.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
+    df_date_add = pd.to_datetime(df_date['Asia/Tehran'].iloc[-1]) + pd.DateOffset(hours=2)
+    df_date_add = pd.DataFrame([df_date_add.strftime("%Y-%m-%d %H:%M")], columns=['Asia/Tehran'])
     df_date = pd.concat([df_date, df_date_add])
 df_date = df_date.reset_index(drop=True)
 
 
 plt.figure(figsize=(20,7))
-plt.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
-plt.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
-plt.xticks(np.arange(0,df[num_shape:].shape[0],12))
+plt.plot(df['Asia/Tehran'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
+plt.plot(df_date['Asia/Tehran'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
+plt.xticks(np.arange(0,df[num_shape:].shape[0],10))
 plt.title(f'{coin_name} Price Prediction')
-plt.xlabel('Date')
+plt.xlabel('Asia/Tehran')
 plt.ylabel('Price ($)')
 plt.legend()
 plt.show()

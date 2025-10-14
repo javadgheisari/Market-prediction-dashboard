@@ -11,14 +11,16 @@ from sklearn.model_selection import train_test_split
 from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam, SGD
 from keras.models import load_model
+from pathlib import Path
+from easygui import fileopenbox
 
-address = 'live-data/crypto/BTC.csv'
-# address = 'live-data/forex/EUR.csv'
+address = fileopenbox(title="choose csv file")
+# address = str(Path.cwd()) + '/code/data/forex/EUR-USD.csv'
 
 df = pd.read_csv(address)
 # coin_name = address.split("/")[1].split(".")[0].split("_")[1]
-coin_name = address.split("/")[2].split(".")[0]
-df = df.sort_values('Date').reset_index(drop=True)
+coin_name = address.split("/")[-1].split(".")[0]
+df = df.sort_values('Asia/Tehran').reset_index(drop=True)
 
 df.head()
 
@@ -26,18 +28,18 @@ df.head()
 
 df.shape
 
-# for date in df['Date']:
+# for date in df['Asia/Tehran']:
 #     df = df.replace(date,date[:10])
     # print(date)
-# df.replace(df['Date'][0],'sfsf')
-# print(df['Date'])
+# df.replace(df['Asia/Tehran'][0],'sfsf')
+# print(df['Asia/Tehran'])
 
 df['Close'] = df['Close'].astype(float)
 
 # plt.figure(figsize=(20,7))
-# plt.plot(df['Date'].values, df['Close'].values, label = 'Aave Stock Price', color = 'red')
+# plt.plot(df['Asia/Tehran'].values, df['Close'].values, label = 'Aave Stock Price', color = 'red')
 # plt.xticks(np.arange(0,df.shape[0],20))
-# plt.xlabel('Date')
+# plt.xlabel('Asia/Tehran')
 # plt.ylabel('Close ($)')
 # plt.legend()
 # plt.show()
@@ -65,7 +67,7 @@ X_train = []
 #Price on next day
 y_train = []
 
-window = 60
+window = 5
 
 for i in range(window, num_shape):
     X_train_ = np.reshape(train_scaled[i-window:i, 0], (window, 1))
@@ -99,7 +101,7 @@ modelGRU.add(Dense(units=1))
 modelGRU.summary()
 
 modelGRU.compile(optimizer='adam', loss='mean_squared_error')
-modelGRU.fit(X_train, y_train, epochs=15, batch_size=128)
+modelGRU.fit(X_train, y_train, epochs=30, batch_size=128)
 
 # modelGRU.save("models/")
 
@@ -144,11 +146,11 @@ print("RMSE:", np.sqrt(np.mean(diff**2)))
 
 # plt.figure(figsize=(20,7))
 # # print(df_volume[200:])
-# plt.plot(df['Date'].values[num_shape+15:], df_volume[num_shape+15:], color = 'red', label = 'Real Aave Price')
-# plt.plot(df['Date'][-predict.shape[0]+15:].values, predict[15:], color = 'blue', label = 'Predicted Aave Price')
+# plt.plot(df['Asia/Tehran'].values[num_shape+15:], df_volume[num_shape+15:], color = 'red', label = 'Real Aave Price')
+# plt.plot(df['Asia/Tehran'][-predict.shape[0]+15:].values, predict[15:], color = 'blue', label = 'Predicted Aave Price')
 # plt.xticks(np.arange(0,df[num_shape+round(num_shape*0.1):].shape[0],7))
 # plt.title('Bitcoin Price Prediction')
-# plt.xlabel('Date')
+# plt.xlabel('Asia/Tehran')
 # plt.ylabel('Price ($)')
 # plt.legend()
 # plt.show()
@@ -157,7 +159,7 @@ print("RMSE:", np.sqrt(np.mean(diff**2)))
 # n day predict
 pred_ = predict[-1].copy()
 prediction_full = []
-window = 60
+window = 5
 df_copy = df.iloc[:, 1:2][1:].values
 
 # for 12*2 = 2 days predict
@@ -189,22 +191,22 @@ for j in range(predict_days):
 
 prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1)))
 
-df_date = df[['Date']]
+df_date = df[['Asia/Tehran']]
 
 for h in range(predict_days):
-    kk = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=1)
-    kk = pd.DataFrame([kk.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
+    kk = pd.to_datetime(df_date['Asia/Tehran'].iloc[-1]) + pd.DateOffset(minutes=5)
+    kk = pd.DataFrame([kk.strftime("%Y-%m-%d %H:%M")], columns=['Asia/Tehran'])
     df_date = pd.concat([df_date, kk])
 df_date = df_date.reset_index(drop=True)
 
 
 
 plt.figure(figsize=(20,7))
-plt.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
-plt.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
-plt.xticks(np.arange(0,df_date[num_shape:].shape[0],12))
+plt.plot(df['Asia/Tehran'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
+plt.plot(df_date['Asia/Tehran'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price', marker='o')
+plt.xticks(np.arange(0,df_date[num_shape:].shape[0],10))
 plt.title(f'{coin_name} Price Prediction')
-plt.xlabel('Date')
+plt.xlabel('Asia/Tehran')
 plt.ylabel('Price ($)')
 plt.legend()
 plt.show()
