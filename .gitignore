@@ -14,3 +14,5 @@
 /mysite/dashboard/migrations
 /mysite/dashboard/models
 /open-plot-app
+/plots
+/models

@@ -41,8 +41,9 @@ class PredictView(View):
         if form.is_valid():
             model_name = form.cleaned_data['model_name']
             predict_days = form.cleaned_data['predict_days']
-
-            address = 'D:/umz/دروس/ترم8/Project/mysite/dashboard/data/new/'+symbol_name+'.csv'
+            from pathlib import Path
+            base_address = str(Path.cwd())
+            address = base_address+'/dashboard/data/new/'+symbol_name+'.csv'
             df = pd.read_csv(address)
             coin_name = symbol_name
             df = df.sort_values('Date').reset_index(drop=True)
@@ -91,7 +92,7 @@ class PredictView(View):
             # and the corresponding y_train value represents the target value to be predicted for the next time step.
             
             try:
-                model = load_model(f"D:/umz/دروس/ترم8/Project/mysite/dashboard/models/{model_name}/{symbol_name}/")
+                model = load_model(f"{base_address}/dashboard/models/{model_name}/{symbol_name}/")
 
             except OSError:
 

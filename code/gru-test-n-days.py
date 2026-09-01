@@ -13,6 +13,7 @@ from keras.optimizers import Adam, SGD
 from keras.models import load_model
 from pathlib import Path
 from easygui import fileopenbox
+import pickle
 
 address = fileopenbox(title="choose csv file")
 # address = str(Path.cwd()) + '/code/data/forex/EUR-USD.csv'
@@ -101,7 +102,7 @@ modelGRU.add(Dense(units=1))
 modelGRU.summary()
 
 modelGRU.compile(optimizer='adam', loss='mean_squared_error')
-modelGRU.fit(X_train, y_train, epochs=30, batch_size=128)
+modelGRU.fit(X_train, y_train, epochs=250, batch_size=128)
 
 # modelGRU.save("models/")
 
@@ -202,11 +203,17 @@ df_date = df_date.reset_index(drop=True)
 
 
 plt.figure(figsize=(20,7))
-plt.plot(df['Asia/Tehran'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
-plt.plot(df_date['Asia/Tehran'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price', marker='o')
-plt.xticks(np.arange(0,df_date[num_shape:].shape[0],10))
-plt.title(f'{coin_name} Price Prediction')
-plt.xlabel('Asia/Tehran')
-plt.ylabel('Price ($)')
-plt.legend()
-plt.show()
+fig, ax = plt.subplots()
+
+ax.plot(df['Asia/Tehran'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
+ax.plot(df_date['Asia/Tehran'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price', marker='o')
+ax.set_xticks(np.arange(0,df_date[num_shape:].shape[0],10))
+ax.set_title(f'{coin_name} Price Prediction')
+ax.set_xlabel('Asia/Tehran')
+ax.set_ylabel('Price ($)')
+ax.legend()
+# plt.show()
+
+# Save the plot as a pickle file
+with open(f'plots/{coin_name}/{datetime.now().strftime("%Y-%m-%d")}.pkl', 'wb') as f:
+    pickle.dump(fig, f)

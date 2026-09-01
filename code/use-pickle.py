@@ -12,14 +12,14 @@ from keras.callbacks import EarlyStopping
 from keras.optimizers import Adam, SGD
 from keras.models import load_model
 import pickle
+from pathlib import Path
 
 # address = 'live-data/crypto/BTC.csv'
-address = 'live-data/forex/EUR.csv'
-
+address = str(Path.cwd()) + '/code/data/forex/EUR-USD.csv'
 df = pd.read_csv(address)
 # coin_name = address.split("/")[1].split(".")[0].split("_")[1]
 coin_name = address.split("/")[2].split(".")[0]
-df = df.sort_values('Date').reset_index(drop=True)
+df = df.sort_values('UTC').reset_index(drop=True)
 
 df.head()
 
@@ -190,11 +190,11 @@ for j in range(predict_days):
 
 prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1)))
 
-df_date = df[['Date']]
+df_date = df[['UTC']]
 
 for h in range(predict_days):
-    kk = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=1)
-    kk = pd.DataFrame([kk.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
+    kk = pd.to_datetime(df_date['UTC'].iloc[-1]) + pd.DateOffset(hours=1)
+    kk = pd.DataFrame([kk.strftime("%Y-%m-%d %H:%M")], columns=['UTC'])
     df_date = pd.concat([df_date, kk])
 df_date = df_date.reset_index(drop=True)
 
@@ -202,11 +202,11 @@ df_date = df_date.reset_index(drop=True)
 
 plt.figure(figsize=(20, 7))
 fig, ax = plt.subplots()
-ax.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color='red', label=f'Real {coin_name} Price')
-ax.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color='blue', label=f'Predicted {coin_name} Price')
+ax.plot(df['UTC'].values[num_shape+50:], df_volume[num_shape+50:], color='red', label=f'Real {coin_name} Price')
+ax.plot(df_date['UTC'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color='blue', label=f'Predicted {coin_name} Price')
 ax.set_xticks(np.arange(0, df_date[num_shape:].shape[0], 12))
 ax.set_title(f'{coin_name} Price Prediction')
-ax.set_xlabel('Date')
+ax.set_xlabel('UTC')
 ax.set_ylabel('Price ($)')
 ax.legend()
 

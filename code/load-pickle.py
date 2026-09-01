@@ -1,11 +1,11 @@
 import matplotlib.pyplot as plt
 import pickle
-from datetime import datetime
+from easygui import fileopenbox
 
-# print(type(datetime.now().strftime("%Y-%m-%d")))
+address = fileopenbox(title="choose pkl file")
 
 # Load the plot from the pickle file
-with open('plots/BTC/2023-11-17.pkl', 'rb') as f:
+with open(address, 'rb') as f:
     fig = pickle.load(f)
 
 # Display the plot
