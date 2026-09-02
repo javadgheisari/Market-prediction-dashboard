@@ -31,6 +31,70 @@ from tensorflow.keras.optimizers import Adam
 
 ModelKind = Literal["GRU", "LSTM"]
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+NEWS_DATE_COLUMNS = (
+    "published_at",
+    "published",
+    "datetime",
+    "timestamp",
+    "date",
+    "Date",
+    "time",
+)
+NEWS_TEXT_COLUMNS = (
+    "headline",
+    "title",
+    "summary",
+    "description",
+    "body",
+    "content",
+    "text",
+)
+NEWS_IMPACT_COLUMNS = (
+    "asset_impact",
+    "impact_score",
+    "gold_impact",
+    "sentiment_score",
+    "sentiment",
+)
+
+# These phrases describe likely pressure on gold, not the emotional tone of an
+# article. For other assets, supplying an explicit asset_impact column is much
+# more reliable than this fallback scorer.
+GOLD_BULLISH_PHRASES = {
+    "rate cut": 2.0,
+    "dovish": 1.5,
+    "lower yields": 1.5,
+    "yields fall": 1.5,
+    "dollar weakens": 1.5,
+    "weak dollar": 1.5,
+    "geopolitical tension": 1.5,
+    "geopolitical risk": 1.5,
+    "war": 1.0,
+    "conflict escalates": 1.5,
+    "safe haven": 1.5,
+    "inflation rises": 1.2,
+    "inflation fears": 1.2,
+    "central bank buying": 2.0,
+    "gold purchases": 1.5,
+    "recession fears": 1.5,
+    "economic uncertainty": 1.0,
+    "banking crisis": 1.5,
+}
+GOLD_BEARISH_PHRASES = {
+    "rate hike": 2.0,
+    "hawkish": 1.5,
+    "higher yields": 1.5,
+    "yields rise": 1.5,
+    "dollar strengthens": 1.5,
+    "strong dollar": 1.5,
+    "ceasefire": 1.2,
+    "de-escalation": 1.2,
+    "risk appetite": 1.0,
+    "inflation cools": 1.2,
+    "central bank selling": 2.0,
+    "strong jobs": 1.2,
+    "strong economy": 1.0,
+}
 
 
 @dataclass(frozen=True)
@@ -46,6 +110,8 @@ class ForecastConfig:
     learning_rate: float = 1e-3
     patience: int = 15
     seed: int = 42
+    news_half_life_hours: float = 24.0
+    news_lookback_hours: float = 168.0
 
 
 def set_reproducible_seed(seed: int) -> None:
@@ -92,7 +158,240 @@ def load_market_data(path: Path, date_col: str, close_col: str) -> pd.DataFrame:
     return df
 
 
-def build_features(df: pd.DataFrame, date_col: str, close_col: str) -> pd.DataFrame:
+def resolve_column(
+    df: pd.DataFrame,
+    requested: str | None,
+    candidates: tuple[str, ...],
+    description: str,
+) -> str:
+    if requested:
+        if requested not in df.columns:
+            raise ValueError(
+                f"News CSV has no '{requested}' {description} column. "
+                f"Available columns: {list(df.columns)}"
+            )
+        return requested
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+    raise ValueError(
+        f"Could not detect the news {description} column. Expected one of "
+        f"{list(candidates)}; available columns: {list(df.columns)}"
+    )
+
+
+def score_gold_news(text: str) -> float:
+    """Return a bounded estimate of an article's directional impact on gold."""
+    normalized = " ".join(text.lower().replace("-", " ").split())
+    bullish = sum(
+        weight for phrase, weight in GOLD_BULLISH_PHRASES.items() if phrase in normalized
+    )
+    bearish = sum(
+        weight for phrase, weight in GOLD_BEARISH_PHRASES.items() if phrase in normalized
+    )
+    return float(np.tanh((bullish - bearish) / 3.0))
+
+
+def parse_impact_value(value: Any) -> float:
+    labels = {
+        "very bullish": 1.0,
+        "bullish": 0.7,
+        "positive": 0.7,
+        "up": 0.7,
+        "neutral": 0.0,
+        "mixed": 0.0,
+        "bearish": -0.7,
+        "negative": -0.7,
+        "down": -0.7,
+        "very bearish": -1.0,
+    }
+    if pd.isna(value):
+        return 0.0
+    label = str(value).strip().lower()
+    if label in labels:
+        return labels[label]
+    try:
+        return float(np.clip(float(value), -1.0, 1.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def align_news_timezone(
+    news_dates: pd.Series, market_dates: pd.Series
+) -> pd.Series:
+    """Put news timestamps in the market timestamp's timezone representation."""
+    market_timezone = market_dates.dt.tz
+    news_timezone = news_dates.dt.tz
+    if market_timezone is None and news_timezone is not None:
+        return news_dates.dt.tz_localize(None)
+    if market_timezone is not None and news_timezone is None:
+        return news_dates.dt.tz_localize(
+            market_timezone, ambiguous="NaT", nonexistent="shift_forward"
+        )
+    if market_timezone is not None and news_timezone is not None:
+        return news_dates.dt.tz_convert(market_timezone)
+    return news_dates
+
+
+def load_news_data(
+    path: Path,
+    market_dates: pd.Series,
+    asset_name: str,
+    date_col: str | None = None,
+    impact_col: str | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Load news and produce publication time, impact, and confidence columns."""
+    raw = pd.read_csv(path)
+    if raw.empty:
+        raise ValueError("The selected news CSV is empty.")
+    resolved_date_col = resolve_column(raw, date_col, NEWS_DATE_COLUMNS, "date")
+    original_dates = raw[resolved_date_col].astype(str)
+    parsed_dates = parse_datetimes(raw[resolved_date_col])
+    parsed_dates = align_news_timezone(parsed_dates, market_dates)
+
+    # A date without a publication time is only considered known on the next
+    # day. This conservative rule prevents a daily summary from leaking news
+    # published later that same day into earlier price candles.
+    date_only = ~original_dates.str.contains(r"\d{1,2}:\d{2}", regex=True, na=False)
+    delayed_rows = date_only & parsed_dates.notna()
+    if delayed_rows.any():
+        parsed_dates = parsed_dates.copy()
+        parsed_dates.loc[delayed_rows] = (
+            parsed_dates.loc[delayed_rows] + pd.Timedelta(days=1)
+        )
+
+    resolved_impact_col: str | None = None
+    for candidate in ((impact_col,) if impact_col else NEWS_IMPACT_COLUMNS):
+        if candidate and candidate in raw.columns:
+            resolved_impact_col = candidate
+            break
+
+    text_columns = [column for column in NEWS_TEXT_COLUMNS if column in raw.columns]
+    if resolved_impact_col:
+        impacts = raw[resolved_impact_col].map(parse_impact_value).astype(float)
+        scoring_method = f"explicit:{resolved_impact_col}"
+    else:
+        is_gold = "gold" in asset_name.lower() or "xau" in asset_name.lower()
+        if not is_gold:
+            raise ValueError(
+                "News for non-gold assets needs an asset_impact/impact_score column "
+                "with values from -1 (bearish) to +1 (bullish)."
+            )
+        if not text_columns:
+            raise ValueError(
+                "News CSV needs a headline/title/body/content column when no "
+                "explicit impact score is provided."
+            )
+        combined_text = raw[text_columns].fillna("").astype(str).agg(" ".join, axis=1)
+        impacts = combined_text.map(score_gold_news)
+        scoring_method = "gold_phrase_fallback"
+
+    quality = pd.Series(1.0, index=raw.index)
+    quality_columns: list[str] = []
+    for column in ("relevance", "importance", "source_quality", "confidence"):
+        if column in raw.columns:
+            values = pd.to_numeric(raw[column], errors="coerce").fillna(1.0)
+            quality *= values.clip(0.0, 1.0)
+            quality_columns.append(column)
+
+    news = pd.DataFrame(
+        {
+            "published_at": parsed_dates,
+            "impact": impacts.clip(-1.0, 1.0),
+            "quality": quality.clip(0.0, 1.0),
+        }
+    )
+    if text_columns:
+        news["deduplication_text"] = (
+            raw[text_columns].fillna("").astype(str).agg(" ".join, axis=1).str.lower()
+        )
+    news = news.dropna(subset=["published_at"])
+    if "deduplication_text" in news:
+        news = news.drop_duplicates(
+            subset=["published_at", "deduplication_text"], keep="last"
+        )
+    news = news.sort_values("published_at").reset_index(drop=True)
+    if news.empty:
+        raise ValueError("The news CSV contains no valid publication dates.")
+
+    metadata: dict[str, Any] = {
+        "path": str(path),
+        "rows_loaded": len(news),
+        "date_column": resolved_date_col,
+        "impact_column": resolved_impact_col,
+        "text_columns": text_columns,
+        "quality_columns": quality_columns,
+        "scoring_method": scoring_method,
+        "date_only_rows_delayed_to_next_day": int(date_only.sum()),
+    }
+    return news[["published_at", "impact", "quality"]], metadata
+
+
+def build_news_features(
+    market_dates: pd.Series,
+    news: pd.DataFrame,
+    half_life_hours: float,
+    lookback_hours: float,
+) -> pd.DataFrame:
+    """Align decayed news signals to candles using publication-time cutoffs."""
+    if half_life_hours <= 0 or lookback_hours <= 0:
+        raise ValueError("News half-life and lookback must be positive.")
+
+    market_ns = market_dates.array.asi8
+    news_ns = news["published_at"].array.asi8
+    impacts = news["impact"].to_numpy(dtype=float)
+    qualities = news["quality"].to_numpy(dtype=float)
+    hour_ns = float(pd.Timedelta(hours=1).value)
+    lookback_ns = int(pd.Timedelta(hours=lookback_hours).value)
+    day_ns = int(pd.Timedelta(hours=24).value)
+
+    rows: list[tuple[float, float, float, float, float]] = []
+    for timestamp in market_ns:
+        end = int(np.searchsorted(news_ns, timestamp, side="right"))
+        start = int(np.searchsorted(news_ns, timestamp - lookback_ns, side="left"))
+        day_start = int(np.searchsorted(news_ns, timestamp - day_ns, side="left"))
+        if start == end:
+            rows.append((0.0, 0.0, 0.0, 0.0, float(end - day_start)))
+            continue
+
+        ages = (timestamp - news_ns[start:end]) / hour_ns
+        decay = np.power(0.5, ages / half_life_hours)
+        weights = decay * qualities[start:end]
+        weight_sum = float(weights.sum())
+        if weight_sum <= np.finfo(float).eps:
+            rows.append((0.0, 0.0, 0.0, 0.0, float(end - day_start)))
+            continue
+
+        recent_impacts = impacts[start:end]
+        mean_impact = float(np.sum(weights * recent_impacts) / weight_sum)
+        disagreement = float(
+            np.sqrt(np.sum(weights * (recent_impacts - mean_impact) ** 2) / weight_sum)
+        )
+        bullish = float(np.sum(weights * np.clip(recent_impacts, 0.0, None)))
+        bearish = float(np.sum(weights * np.clip(-recent_impacts, 0.0, None)))
+        rows.append(
+            (mean_impact, bullish, bearish, disagreement, float(end - day_start))
+        )
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "news_impact",
+            "news_bullish_attention",
+            "news_bearish_attention",
+            "news_disagreement",
+            "news_count_24h",
+        ],
+        index=market_dates.index,
+    )
+
+
+def build_features(
+    df: pd.DataFrame,
+    date_col: str,
+    close_col: str,
+    news_features: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Create causal features; every row uses only that candle and earlier data."""
     close = df[close_col].astype(float)
     log_close = np.log(close)
@@ -125,6 +424,9 @@ def build_features(df: pd.DataFrame, date_col: str, close_col: str) -> pd.DataFr
     features["time_cos"] = np.cos(2 * np.pi * minutes / 1440.0)
     features["weekday_sin"] = np.sin(2 * np.pi * dates.dt.dayofweek / 7.0)
     features["weekday_cos"] = np.cos(2 * np.pi * dates.dt.dayofweek / 7.0)
+
+    if news_features is not None:
+        features = features.join(news_features)
 
     return features.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
@@ -236,6 +538,8 @@ def save_outputs(
     return_scale: float,
     config: ForecastConfig,
     feature_names: list[str],
+    news_metadata: dict[str, Any] | None,
+    news_features: pd.DataFrame | None,
     metrics: dict[str, Any],
     dates: pd.Series,
     close: np.ndarray,
@@ -261,14 +565,26 @@ def save_outputs(
                 "target_scaler": target_scaler,
                 "return_scale": return_scale,
                 "feature_names": feature_names,
+                "news_metadata": news_metadata,
                 "config": asdict(config),
             },
             output,
         )
     metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
-    fig, ax = plt.subplots(figsize=(16, 7))
+    if news_features is not None:
+        fig, (ax, news_ax) = plt.subplots(
+            2,
+            1,
+            figsize=(16, 9),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 1]},
+        )
+    else:
+        fig, ax = plt.subplots(figsize=(16, 7))
+        news_ax = None
     context_start = max(0, split_index - config.window)
+    model_label = f"{kind} + news" if news_features is not None else kind
     ax.plot(
         dates.iloc[context_start:],
         close[context_start:],
@@ -281,7 +597,7 @@ def save_outputs(
         test_predictions,
         color="royalblue",
         linewidth=1.2,
-        label=f"{kind} one-step test forecast",
+        label=f"{model_label} one-step test forecast",
     )
     ax.plot(
         future_dates,
@@ -289,14 +605,41 @@ def save_outputs(
         color="darkorange",
         marker="o",
         markersize=3,
-        label=f"{kind} future forecast",
+        label=f"{model_label} future forecast (no new news assumed)",
     )
     ax.axvline(dates.iloc[split_index], color="gray", linestyle="--", alpha=0.7)
-    ax.set_title(f"{coin_name} price forecast using {kind}")
+    ax.set_title(f"{coin_name} price forecast using {model_label}")
     ax.set_xlabel("Date")
     ax.set_ylabel("Price")
     ax.grid(alpha=0.25)
     ax.legend()
+    if news_ax is not None and news_features is not None:
+        sentiment = news_features["news_impact"].iloc[context_start:]
+        sentiment_dates = dates.iloc[context_start:]
+        news_ax.plot(sentiment_dates, sentiment, color="slateblue", linewidth=1.0)
+        news_ax.fill_between(
+            sentiment_dates,
+            0,
+            sentiment,
+            where=sentiment >= 0,
+            color="seagreen",
+            alpha=0.3,
+            label="Bullish asset impact",
+        )
+        news_ax.fill_between(
+            sentiment_dates,
+            0,
+            sentiment,
+            where=sentiment < 0,
+            color="firebrick",
+            alpha=0.3,
+            label="Bearish asset impact",
+        )
+        news_ax.axhline(0, color="gray", linewidth=0.8)
+        news_ax.set_ylabel("News impact")
+        news_ax.set_ylim(-1.05, 1.05)
+        news_ax.grid(alpha=0.2)
+        news_ax.legend(loc="upper left", ncol=2)
     fig.autofmt_xdate()
     fig.tight_layout()
 
@@ -316,12 +659,12 @@ def save_outputs(
     print(f"Plot saved to: {png_path}")
 
 
-def choose_csv_file() -> Path:
+def choose_csv_file(title: str) -> Path:
     try:
         from easygui import fileopenbox
     except ImportError as exc:
         raise ValueError("Pass a CSV path on the command line (easygui is unavailable).") from exc
-    selected = fileopenbox(title="Choose a CSV file containing market data")
+    selected = fileopenbox(title=title, filetypes=["*.csv"])
     if not selected:
         raise ValueError("No CSV file was selected.")
     return Path(selected)
@@ -333,6 +676,9 @@ def train_and_forecast(
     date_col: str,
     close_col: str,
     config: ForecastConfig,
+    news_csv_path: Path | None = None,
+    news_date_col: str | None = None,
+    news_impact_col: str | None = None,
     interval_minutes: float | None = None,
     show_plot: bool = False,
 ) -> dict[str, Any]:
@@ -344,10 +690,40 @@ def train_and_forecast(
         raise ValueError("window, forecast_steps, batch_size, and epochs must be positive.")
     if not 0 <= config.dropout < 1:
         raise ValueError("dropout must be in [0, 1).")
+    if config.news_half_life_hours <= 0 or config.news_lookback_hours <= 0:
+        raise ValueError("News half-life and lookback must be positive.")
 
     set_reproducible_seed(config.seed)
     df = load_market_data(csv_path, date_col, close_col)
-    features = build_features(df, date_col, close_col)
+    news_metadata: dict[str, Any] | None = None
+    news_features: pd.DataFrame | None = None
+    if news_csv_path is not None:
+        news, news_metadata = load_news_data(
+            path=news_csv_path,
+            market_dates=df[date_col],
+            asset_name=csv_path.stem,
+            date_col=news_date_col,
+            impact_col=news_impact_col,
+        )
+        news_features = build_news_features(
+            market_dates=df[date_col],
+            news=news,
+            half_life_hours=config.news_half_life_hours,
+            lookback_hours=config.news_lookback_hours,
+        )
+        news_metadata["feature_coverage_percent"] = float(
+            np.mean(news_features.abs().sum(axis=1) > 0) * 100
+        )
+        if news_metadata["feature_coverage_percent"] == 0:
+            raise ValueError(
+                "No news falls within the market data period and configured news "
+                "lookback. Check the two files' dates and timezones."
+            )
+        print(
+            f"Loaded {len(news)} news rows using "
+            f"{news_metadata['scoring_method']} scoring"
+        )
+    features = build_features(df, date_col, close_col, news_features)
     close = df[close_col].to_numpy(dtype=np.float64)
     log_returns = np.diff(np.log(close), prepend=np.log(close[0])).reshape(-1, 1)
 
@@ -361,6 +737,19 @@ def train_and_forecast(
         )
     if split_index + 1 >= len(df):
         raise ValueError("The test partition must contain at least two rows.")
+    if news_features is not None and news_metadata is not None:
+        training_news_coverage = float(
+            np.mean(
+                news_features.iloc[:validation_start].abs().sum(axis=1) > 0
+            )
+            * 100
+        )
+        news_metadata["training_feature_coverage_percent"] = training_news_coverage
+        if training_news_coverage == 0:
+            raise ValueError(
+                "News does not overlap the training partition. Provide historical "
+                "news covering the price-training period."
+            )
 
     # Fit preprocessing only on the sub-training partition. Validation and test
     # information therefore cannot influence model selection.
@@ -477,6 +866,7 @@ def train_and_forecast(
         "train_samples": len(x_train),
         "validation_samples": len(x_validation),
         "test_samples": len(actual_test),
+        "news": news_metadata,
         "validation_selected_return_scale": return_scale,
         "model_metrics": model_metrics,
         "raw_unscaled_model_metrics": raw_model_metrics,
@@ -508,6 +898,8 @@ def train_and_forecast(
         return_scale=return_scale,
         config=config,
         feature_names=list(features.columns),
+        news_metadata=news_metadata,
+        news_features=news_features,
         metrics=metrics,
         dates=df[date_col],
         close=close,
@@ -522,9 +914,22 @@ def train_and_forecast(
 
 def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=f"Train an improved {kind} market forecaster")
-    parser.add_argument("csv", nargs="?", type=Path, help="Market data CSV; opens a dialog if omitted")
+    parser.add_argument(
+        "price_csv", nargs="?", type=Path, help="Market price CSV; opens a dialog if omitted"
+    )
+    parser.add_argument(
+        "news_csv", nargs="?", type=Path, help="Asset news CSV; opens a second dialog if omitted"
+    )
     parser.add_argument("--date-col", default="Asia/Tehran")
     parser.add_argument("--close-col", default="Close")
+    parser.add_argument(
+        "--news-date-col",
+        help="News publication-time column; automatically detected when omitted",
+    )
+    parser.add_argument(
+        "--news-impact-col",
+        help="Optional -1 to +1 asset-impact column; automatically detected when omitted",
+    )
     parser.add_argument("--window", type=int, default=60)
     parser.add_argument("--forecast-steps", type=int, default=24)
     parser.add_argument("--split-ratio", type=float, default=0.80)
@@ -536,6 +941,8 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--news-half-life-hours", type=float, default=24.0)
+    parser.add_argument("--news-lookback-hours", type=float, default=168.0)
     parser.add_argument(
         "--interval-minutes",
         type=float,
@@ -547,9 +954,16 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
 
 def main(kind: ModelKind) -> None:
     args = build_argument_parser(kind).parse_args()
-    csv_path = args.csv or choose_csv_file()
+    csv_path = args.price_csv or choose_csv_file(
+        "Choose the CSV file containing market prices"
+    )
+    news_csv_path = args.news_csv or choose_csv_file(
+        "Choose the CSV file containing timestamped asset news"
+    )
     if not csv_path.is_file():
-        raise FileNotFoundError(f"CSV file does not exist: {csv_path}")
+        raise FileNotFoundError(f"Price CSV file does not exist: {csv_path}")
+    if not news_csv_path.is_file():
+        raise FileNotFoundError(f"News CSV file does not exist: {news_csv_path}")
     config = ForecastConfig(
         window=args.window,
         forecast_steps=args.forecast_steps,
@@ -562,6 +976,8 @@ def main(kind: ModelKind) -> None:
         learning_rate=args.learning_rate,
         patience=args.patience,
         seed=args.seed,
+        news_half_life_hours=args.news_half_life_hours,
+        news_lookback_hours=args.news_lookback_hours,
     )
     train_and_forecast(
         kind=kind,
@@ -569,6 +985,9 @@ def main(kind: ModelKind) -> None:
         date_col=args.date_col,
         close_col=args.close_col,
         config=config,
+        news_csv_path=news_csv_path.resolve(),
+        news_date_col=args.news_date_col,
+        news_impact_col=args.news_impact_col,
         interval_minutes=args.interval_minutes,
         show_plot=args.show,
     )
