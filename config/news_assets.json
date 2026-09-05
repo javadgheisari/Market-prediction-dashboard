@@ -1,0 +1,24 @@
+{
+  "assets": {
+    "AAPL": {"query": "Apple AAPL stock", "terms": ["Apple", "AAPL"]},
+    "ADA": {"query": "Cardano ADA cryptocurrency", "terms": ["Cardano", "ADA"]},
+    "AMZN": {"query": "Amazon AMZN stock", "terms": ["Amazon", "AMZN"]},
+    "BTC": {"query": "Bitcoin BTC cryptocurrency", "terms": ["Bitcoin", "BTC"]},
+    "ETH": {"query": "Ethereum ETH cryptocurrency", "terms": ["Ethereum", "ETH"]},
+    "EUR": {"query": "euro EUR currency ECB", "terms": ["euro", "EUR", "ECB"]},
+    "GBP": {"query": "British pound GBP currency Bank of England", "terms": ["pound", "GBP", "Bank of England"]},
+    "GOOGL": {"query": "Alphabet Google GOOGL stock", "terms": ["Alphabet", "Google", "GOOGL"]},
+    "IBM": {"query": "IBM stock", "terms": ["IBM"]},
+    "INTC": {"query": "Intel INTC stock", "terms": ["Intel", "INTC"]},
+    "LNK": {"query": "Chainlink LINK cryptocurrency", "terms": ["Chainlink", "LINK"]},
+    "LTC": {"query": "Litecoin LTC cryptocurrency", "terms": ["Litecoin", "LTC"]},
+    "MAT": {"query": "Mattel MAT stock", "terms": ["Mattel", "MAT"]},
+    "NFLX": {"query": "Netflix NFLX stock", "terms": ["Netflix", "NFLX"]},
+    "TRX": {"query": "TRON TRX cryptocurrency", "terms": ["TRON", "TRX"]},
+    "TSLA": {"query": "Tesla TSLA stock", "terms": ["Tesla", "TSLA"]},
+    "UNI": {"query": "Uniswap UNI cryptocurrency", "terms": ["Uniswap", "UNI"]},
+    "XAG": {"query": "silver price XAG", "terms": ["silver", "XAG"]},
+    "XAU": {"query": "gold price XAU", "terms": ["gold", "XAU"]},
+    "XLM": {"query": "Stellar XLM cryptocurrency", "terms": ["Stellar", "XLM"]}
+  }
+}
