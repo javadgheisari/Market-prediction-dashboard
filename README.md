@@ -101,6 +101,28 @@ See [`data/news/gold_news_sample.csv`](data/news/gold_news_sample.csv) for a
 complete example. Its dates must be adjusted or paired with market data from
 the same period before training.
 
+### Collect current news
+
+`code/news_crawler.py` collects headline metadata from RSS search results and
+updates one CSV per asset. It does not download or scrape article bodies. Run
+it from the repository root, for example:
+
+```bash
+python code/news_crawler.py --assets XAU BTC AAPL --days 7
+```
+
+The output files are `data/news/XAU_news.csv`, `data/news/BTC_news.csv`, and
+`data/news/AAPL_news.csv`. Running the command again merges new articles and
+deduplicates them by URL. Omit `--assets` to collect every symbol in
+`config/news_assets.json`; edit that file to add assets or refine search terms.
+
+The crawler assigns a deliberately low-confidence, keyword-based
+`asset_impact` estimate so its output can be read by the forecasting pipeline.
+Treat it as a baseline: review the scores or replace them with a dedicated
+asset-impact model before relying on them in an experiment. To use a different
+RSS search service, pass a URL template containing `{query}` via
+`--feed-template`.
+
 ## Train an improved model
 
 The LSTM and GRU entry points use the shared pipeline in
@@ -121,7 +143,8 @@ the expected command and schemas but will not train together until their dates
 overlap. Replace either path with matching historical price and news data.
 
 Both positional paths are optional. If omitted, the program opens two file
-pickers: first for prices and then for news.
+pickers: first for prices and then optionally for news. Cancel the news picker to
+train using price data only.
 
 ```bash
 venv/bin/python code/improved_lstm.py --date-col Date
@@ -141,7 +164,8 @@ Common options include:
 --epochs N                   Maximum epochs (default: 150)
 --batch-size N               Batch size (default: 32)
 --interval-minutes FLOAT     Future candle spacing; inferred when omitted
---show                       Display the saved plot after training
+--show                       Display the saved plot after training (default)
+--no-show                    Save the plot without displaying it
 ```
 
 Run `venv/bin/python code/improved_lstm.py --help` for every option.

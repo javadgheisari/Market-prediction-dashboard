@@ -659,14 +659,16 @@ def save_outputs(
     print(f"Plot saved to: {png_path}")
 
 
-def choose_csv_file(title: str) -> Path:
+def choose_csv_file(title: str, *, required: bool = True) -> Path | None:
     try:
         from easygui import fileopenbox
     except ImportError as exc:
         raise ValueError("Pass a CSV path on the command line (easygui is unavailable).") from exc
     selected = fileopenbox(title=title, filetypes=["*.csv"])
     if not selected:
-        raise ValueError("No CSV file was selected.")
+        if required:
+            raise ValueError("No CSV file was selected.")
+        return None
     return Path(selected)
 
 
@@ -918,7 +920,10 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
         "price_csv", nargs="?", type=Path, help="Market price CSV; opens a dialog if omitted"
     )
     parser.add_argument(
-        "news_csv", nargs="?", type=Path, help="Asset news CSV; opens a second dialog if omitted"
+        "news_csv",
+        nargs="?",
+        type=Path,
+        help="Optional asset news CSV; cancel the second dialog to train without news",
     )
     parser.add_argument("--date-col", default="Asia/Tehran")
     parser.add_argument("--close-col", default="Close")
@@ -948,7 +953,19 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
         type=float,
         help="Future candle interval; inferred from timestamps when omitted",
     )
-    parser.add_argument("--show", action="store_true", help="Display the plot after saving it")
+    parser.add_argument(
+        "--show",
+        dest="show",
+        action="store_true",
+        help="Display the plot after saving it (default)",
+    )
+    parser.add_argument(
+        "--no-show",
+        dest="show",
+        action="store_false",
+        help="Save the plot without displaying it",
+    )
+    parser.set_defaults(show=True)
     return parser
 
 
@@ -958,11 +975,13 @@ def main(kind: ModelKind) -> None:
         "Choose the CSV file containing market prices"
     )
     news_csv_path = args.news_csv or choose_csv_file(
-        "Choose the CSV file containing timestamped asset news"
+        "Choose an optional CSV file containing timestamped asset news",
+        required=False,
     )
+    assert csv_path is not None
     if not csv_path.is_file():
         raise FileNotFoundError(f"Price CSV file does not exist: {csv_path}")
-    if not news_csv_path.is_file():
+    if news_csv_path is not None and not news_csv_path.is_file():
         raise FileNotFoundError(f"News CSV file does not exist: {news_csv_path}")
     config = ForecastConfig(
         window=args.window,
@@ -985,7 +1004,7 @@ def main(kind: ModelKind) -> None:
         date_col=args.date_col,
         close_col=args.close_col,
         config=config,
-        news_csv_path=news_csv_path.resolve(),
+        news_csv_path=news_csv_path.resolve() if news_csv_path is not None else None,
         news_date_col=args.news_date_col,
         news_impact_col=args.news_impact_col,
         interval_minutes=args.interval_minutes,
