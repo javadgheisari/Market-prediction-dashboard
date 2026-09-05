@@ -1,5 +1,8 @@
 /venv
-/data
+/data/*
+# !/data/news/
+# /data/news/*
+# !/data/news/gold_news_sample.csv
 /duckascopy-data
 # /code/.vscode
 # /code/crypto-data
