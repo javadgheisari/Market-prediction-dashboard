@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from matplotlib.widgets import Button
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import RobustScaler, StandardScaler
 from tensorflow.keras import Sequential, regularizers
@@ -521,6 +522,45 @@ def calibrate_return_scale(
     return float(candidates[int(np.argmin(errors))])
 
 
+def estimate_direction_probabilities(
+    future_returns: np.ndarray,
+    validation_actual_returns: np.ndarray,
+    validation_predicted_returns: np.ndarray,
+    seed: int,
+    simulations: int = 10_000,
+) -> dict[str, Any]:
+    """Estimate the chance of finishing above or below the latest price.
+
+    The network is deterministic, so its output alone is not a probability.
+    We approximate forecast uncertainty by bootstrapping out-of-sample
+    validation residuals and applying them across the predicted horizon.
+    """
+    residuals = np.asarray(validation_actual_returns) - np.asarray(
+        validation_predicted_returns
+    )
+    residuals = residuals[np.isfinite(residuals)]
+    if residuals.size < 2:
+        raise ValueError(
+            "At least two validation residuals are required to estimate direction probabilities."
+        )
+
+    rng = np.random.default_rng(seed)
+    simulated_residuals = rng.choice(
+        residuals,
+        size=(simulations, len(future_returns)),
+        replace=True,
+    )
+    terminal_log_returns = np.sum(future_returns + simulated_residuals, axis=1)
+    bullish_percent = float(np.mean(terminal_log_returns > 0) * 100)
+    return {
+        "bullish_percent": bullish_percent,
+        "bearish_percent": 100.0 - bullish_percent,
+        "horizon_steps": int(len(future_returns)),
+        "simulations": simulations,
+        "method": "validation-residual bootstrap",
+    }
+
+
 def infer_interval(dates: pd.Series) -> pd.Timedelta:
     differences = dates.sort_values().diff().dropna()
     positive = differences[differences > pd.Timedelta(0)]
@@ -557,14 +597,15 @@ def save_outputs(
     test_predictions: np.ndarray,
     future_dates: pd.DatetimeIndex,
     future_predictions: np.ndarray,
+    direction_probabilities: dict[str, Any],
     show_plot: bool,
+    save_plots: bool = False,
 ) -> None:
     model_dir = PROJECT_ROOT / "models"
     asset_symbol = extract_asset_symbol(coin_name)
     stamp = datetime.now().strftime("%Y-%m-%d")
     plot_dir = PROJECT_ROOT / "plots" / asset_symbol / stamp
     model_dir.mkdir(parents=True, exist_ok=True)
-    plot_dir.mkdir(parents=True, exist_ok=True)
 
     model_path = model_dir / f"{kind.lower()}_{coin_name}.h5"
     preprocessing_path = model_dir / f"{kind.lower()}_{coin_name}_preprocessing.pkl"
@@ -625,6 +666,19 @@ def save_outputs(
     ax.set_ylabel("Price")
     ax.grid(alpha=0.25)
     ax.legend()
+    bullish = direction_probabilities["bullish_percent"]
+    bearish = direction_probabilities["bearish_percent"]
+    ax.text(
+        0.015,
+        0.97,
+        f"Forecast direction ({config.forecast_steps} steps)\n"
+        f"Bullish: {bullish:.1f}%   Bearish: {bearish:.1f}%",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=10,
+        fontweight="bold",
+        bbox={"boxstyle": "round,pad=0.5", "facecolor": "white", "alpha": 0.85},
+    )
     if news_ax is not None and news_features is not None:
         sentiment = news_features["news_impact"].iloc[context_start:]
         sentiment_dates = dates.iloc[context_start:]
@@ -653,21 +707,44 @@ def save_outputs(
         news_ax.grid(alpha=0.2)
         news_ax.legend(loc="upper left", ncol=2)
     fig.autofmt_xdate()
-    fig.tight_layout()
+    # Leave room for an interactive save button when the figure is displayed.
+    fig.tight_layout(rect=(0, 0.07 if show_plot else 0, 1, 1))
 
     png_path = plot_dir / f"{stamp}_{kind}.png"
     pickle_path = plot_dir / f"{stamp}_{kind}.pkl"
-    fig.savefig(png_path, dpi=150)
-    with pickle_path.open("wb") as output:
-        pickle.dump(fig, output)
+    save_button: Button | None = None
+    button_axes = None
+
+    def save_plot(_event: Any = None) -> None:
+        """Save both the rendered image and the reusable Matplotlib figure."""
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        if button_axes is not None:
+            button_axes.set_visible(False)
+        try:
+            fig.savefig(png_path, dpi=150)
+            with pickle_path.open("wb") as output:
+                pickle.dump(fig, output)
+        finally:
+            if button_axes is not None:
+                button_axes.set_visible(True)
+                fig.canvas.draw_idle()
+        print(f"Plot saved to: {png_path}")
+
+    if save_plots:
+        save_plot()
     if show_plot:
+        button_axes = fig.add_axes((0.44, 0.015, 0.12, 0.04))
+        save_button = Button(button_axes, "Save plot")
+        save_button.on_clicked(save_plot)
         plt.show()
+        # Keep a reference until the GUI window closes; Matplotlib widgets stop
+        # responding when they are garbage-collected.
+        _ = save_button
     plt.close(fig)
 
     print(f"Model saved to: {model_path}")
     print(f"Preprocessing saved to: {preprocessing_path}")
     print(f"Metrics saved to: {metrics_path}")
-    print(f"Plot saved to: {png_path}")
 
 
 def choose_csv_file(title: str, *, required: bool = True) -> Path | None:
@@ -694,6 +771,7 @@ def train_and_forecast(
     news_impact_col: str | None = None,
     interval_minutes: float | None = None,
     show_plot: bool = False,
+    save_plots: bool = False,
 ) -> dict[str, Any]:
     if not 0.5 <= config.split_ratio < 1:
         raise ValueError("split_ratio must be in [0.5, 1.0).")
@@ -885,12 +963,19 @@ def train_and_forecast(
         "raw_unscaled_model_metrics": raw_model_metrics,
         "naive_last_price_baseline": baseline_metrics,
     }
-    print(json.dumps(metrics, indent=2))
-
     final_window = scaled_features[-config.window :][None, ...].astype(np.float32)
     future_scaled = model.predict(final_window, verbose=0)[0].reshape(-1, 1)
     future_returns = target_scaler.inverse_transform(future_scaled).ravel() * return_scale
     future_predictions = close[-1] * np.exp(np.cumsum(future_returns))
+    validation_actual_returns = log_returns[validation_indexes, 0]
+    direction_probabilities = estimate_direction_probabilities(
+        future_returns=future_returns,
+        validation_actual_returns=validation_actual_returns,
+        validation_predicted_returns=validation_returns * return_scale,
+        seed=config.seed,
+    )
+    metrics["forecast_direction_probability"] = direction_probabilities
+    print(json.dumps(metrics, indent=2))
     interval = (
         pd.Timedelta(minutes=interval_minutes)
         if interval_minutes is not None
@@ -920,7 +1005,9 @@ def train_and_forecast(
         test_predictions=test_predictions,
         future_dates=future_dates,
         future_predictions=future_predictions,
+        direction_probabilities=direction_probabilities,
         show_plot=show_plot,
+        save_plots=save_plots,
     )
     return metrics
 
@@ -968,13 +1055,18 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
         "--show",
         dest="show",
         action="store_true",
-        help="Display the plot after saving it (default)",
+        help="Display the plot with an interactive Save plot button (default)",
     )
     parser.add_argument(
         "--no-show",
         dest="show",
         action="store_false",
-        help="Save the plot without displaying it",
+        help="Do not display the plot (combine with --save-plots to save it)",
+    )
+    parser.add_argument(
+        "--save-plots",
+        action="store_true",
+        help="Automatically save plot PNG and pickle files; otherwise use the Save plot button",
     )
     parser.set_defaults(show=True)
     return parser
@@ -1020,4 +1112,5 @@ def main(kind: ModelKind) -> None:
         news_impact_col=args.news_impact_col,
         interval_minutes=args.interval_minutes,
         show_plot=args.show,
+        save_plots=args.save_plots,
     )
