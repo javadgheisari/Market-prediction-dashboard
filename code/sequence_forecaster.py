@@ -529,6 +529,16 @@ def infer_interval(dates: pd.Series) -> pd.Timedelta:
     return positive.median()
 
 
+def extract_asset_symbol(coin_name: str) -> str:
+    """Extract asset symbol (e.g., BTC-USD) from full coin name.
+    
+    Examples:
+        "BTC-USD_1Hour_BID_2026-08-01_to_2026-09-01_Asia_Tehran" -> "BTC-USD"
+        "EUR-USD_Minute_2025-10-22_Asia_Tehran" -> "EUR-USD"
+    """
+    return coin_name.split("_")[0]
+
+
 def save_outputs(
     kind: ModelKind,
     coin_name: str,
@@ -550,7 +560,9 @@ def save_outputs(
     show_plot: bool,
 ) -> None:
     model_dir = PROJECT_ROOT / "models"
-    plot_dir = PROJECT_ROOT / "plots" / coin_name
+    asset_symbol = extract_asset_symbol(coin_name)
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    plot_dir = PROJECT_ROOT / "plots" / asset_symbol / stamp
     model_dir.mkdir(parents=True, exist_ok=True)
     plot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -643,7 +655,6 @@ def save_outputs(
     fig.autofmt_xdate()
     fig.tight_layout()
 
-    stamp = datetime.now().strftime("%Y-%m-%d")
     png_path = plot_dir / f"{stamp}_{kind}.png"
     pickle_path = plot_dir / f"{stamp}_{kind}.pkl"
     fig.savefig(png_path, dpi=150)
