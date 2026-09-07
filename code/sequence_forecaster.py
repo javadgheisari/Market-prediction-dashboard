@@ -786,6 +786,7 @@ def train_and_forecast(
 
     set_reproducible_seed(config.seed)
     df = load_market_data(csv_path, date_col, close_col)
+    dates = df[date_col]
     news_metadata: dict[str, Any] | None = None
     news_features: pd.DataFrame | None = None
     if news_csv_path is not None:
@@ -986,6 +987,25 @@ def train_and_forecast(
         periods=config.forecast_steps,
         freq=interval,
     )
+
+    context_start = max(0, split_index - config.window)
+    metrics["chart"] = {
+        "title": f"{extract_asset_symbol(csv_path.stem)} price forecast ({kind})",
+        "actual_dates": [
+            pd.Timestamp(value).strftime("%Y-%m-%d %H:%M")
+            for value in dates.iloc[context_start:]
+        ],
+        "actual_prices": close[context_start:].tolist(),
+        "test_dates": [
+            pd.Timestamp(value).strftime("%Y-%m-%d %H:%M")
+            for value in dates.iloc[split_index:]
+        ],
+        "test_predictions": test_predictions.tolist(),
+        "future_dates": [
+            pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in future_dates
+        ],
+        "future_predictions": future_predictions.tolist(),
+    }
 
     save_outputs(
         kind=kind,

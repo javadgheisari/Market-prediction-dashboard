@@ -1,292 +1,133 @@
+import re
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path
+
+from django.contrib import messages
+from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views import View
-from dashboard.forms import NameForm
-from io import BytesIO
-import base64
 
-import numpy as np 
-import pandas as pd 
-import matplotlib.pyplot as plt
-from datetime import datetime
-from keras.models import Sequential, load_model
-from keras.layers import Dense, LSTM, Dropout, GRU
-from keras.layers import *
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-from sklearn.model_selection import train_test_split
-from keras.callbacks import EarlyStopping
-from keras.optimizers import Adam, SGD
+from dashboard import forecaster, news_service
+from dashboard.data_paths import list_available_assets
+from dashboard.forms import NameForm
+
+
+SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.-]+$")
+
+
+@contextmanager
+def temporary_price_csv(uploaded_file, symbol):
+    if uploaded_file is None:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="market-dashboard-") as directory:
+        path = Path(directory) / f"{symbol}_uploaded.csv"
+        with path.open("wb") as destination:
+            for chunk in uploaded_file.chunks():
+                destination.write(chunk)
+        yield path
+
 
 class DashboardView(View):
-    template_name = 'dashboard.html'
+    template_name = "dashboard.html"
 
     def get(self, request):
-        return render(request, self.template_name)
+        return render(
+            request,
+            self.template_name,
+            {"asset_groups": list_available_assets()},
+        )
+
 
 class PredictView(View):
-    template_name = 'predict.html'
+    template_name = "predict.html"
     form_class = NameForm
 
-    def get(self, request, symbol_name):
+    def get_symbol(self, symbol_name):
+        symbol = symbol_name.strip().upper()
+        if not SYMBOL_PATTERN.fullmatch(symbol):
+            raise ValueError("The asset symbol contains unsupported characters.")
+        return symbol
 
-        context = {
-            'symbol_name': symbol_name,
-            'form': self.form_class()
+    def base_context(self, symbol, form):
+        return {
+            "symbol_name": symbol,
+            "form": form,
+            "asset_news": news_service.load_asset_news(symbol),
         }
-        return render(request, self.template_name, context)
 
+    def get(self, request, symbol_name):
+        try:
+            symbol = self.get_symbol(symbol_name)
+            form = self.form_class(initial={"predict_steps": 24})
+            error = None
+        except ValueError as exc:
+            symbol = symbol_name
+            form = self.form_class()
+            error = str(exc)
+
+        return render(
+            request,
+            self.template_name,
+            {**self.base_context(symbol, form), "error": error},
+        )
 
     def post(self, request, symbol_name):
-        form = self.form_class(request.POST)
+        form = self.form_class(request.POST, request.FILES)
+        symbol = symbol_name.strip().upper()
+        context = self.base_context(symbol, form)
+
         if form.is_valid():
-            model_name = form.cleaned_data['model_name']
-            predict_days = form.cleaned_data['predict_days']
-            from pathlib import Path
-            base_address = str(Path.cwd())
-            address = base_address+'/dashboard/data/new/'+symbol_name+'.csv'
-            df = pd.read_csv(address)
-            coin_name = symbol_name
-            df = df.sort_values('Date').reset_index(drop=True)
-
-            # df.shape
-
-            df['Close'] = df['Close'].astype(float)
- 
-            # limmit count of rows
-            num_shape = round((len(df.index))*0.5)
-
-            # split to odd & even for scattering
-            train = df.iloc[1::2, 1:2].values
-            test = df.iloc[::2, 1:2].values
-
-            # computes the minimum and maximum values of the data and scales the data accordingly
-            # the feature range is set to (0, 1)
-            sc = MinMaxScaler(feature_range = (0, 1))
-            # computes the minimum and maximum values of the data and scales the data accordingly
-            train_scaled = sc.fit_transform(train)
-
-            X_train = []
-            #Price on next day
-            y_train = []
-
-            # window represents the number of previous time steps (or days) to consider as input for predicting the next time step.
-            window = 60
-
-            for i in range(window, num_shape):
-                # `train_scaled[i-window:i, 0]` selects the previous `window` number of values from the `train_scaled` data for creating the input sequence.
-                # `np.reshape` is used to reshape the input sequence to `(window, 1)` to match the expected input shape of the LSTM model.
-                X_train_ = np.reshape(train_scaled[i-window:i, 0], (window, 1))
-                X_train.append(X_train_)
-                try:
-                    y_train.append(train_scaled[i, 0])
-                except:
-                    # if it is not available, the previous time step's value `train_scaled[i-1, 0]` is used
-                    y_train.append(train_scaled[i-1, 0])
-
-            # Stack the input sequences X_train and target values y_train to convert them into numpy arrays
-            X_train = np.stack(X_train)
-            y_train = np.stack(y_train)
-
-            # The resulting X_train and y_train sequences will be used to train the LSTM model for time series prediction.
-            # Each X_train sequence represents a window of previous time steps,
-            # and the corresponding y_train value represents the target value to be predicted for the next time step.
-            
             try:
-                model = load_model(f"{base_address}/dashboard/models/{model_name}/{symbol_name}/")
+                symbol = self.get_symbol(symbol_name)
+                model_name = form.cleaned_data["model_name"]
+                data_source = form.cleaned_data["data_source"]
+                predict_steps = form.cleaned_data["predict_steps"]
+                uploaded_csv = (
+                    form.cleaned_data.get("market_csv")
+                    if form.cleaned_data["price_source"] == "upload"
+                    else None
+                )
+                with temporary_price_csv(uploaded_csv, symbol) as price_csv:
+                    chart_data = forecaster.run_dashboard_forecast(
+                        symbol=symbol,
+                        model_name=model_name,
+                        predict_steps=predict_steps,
+                        price_csv=price_csv,
+                        use_news=data_source == "with_news",
+                    )
+                context.update(
+                    {
+                        "symbol_name": symbol,
+                        "model_name": model_name.upper(),
+                        "data_source": data_source,
+                        "price_source": form.cleaned_data["price_source"],
+                        "predict_steps": predict_steps,
+                        "chart_data": chart_data,
+                    }
+                )
+            except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:
+                context["error"] = str(exc)
 
-            except OSError:
-
-                if model_name == "lstm":
-
-                    # The LSTM layers in the model are stacked on top of each other,
-                    # allowing the model to learn hierarchical representations of the input data.
-                    # The dropout layers help prevent overfitting by randomly setting a fraction of the input units
-                    # to 0 during training.
-
-                    # Initializing the Recurrent Neural Network
-                    model = Sequential()
-
-                    model.add(LSTM(units = 50, return_sequences = True, input_shape = (X_train.shape[1], 1)))
-                    # model.add(Attention(return_sequences = True))
-                    model.add(Dropout(0.2))
-
-                    model.add(LSTM(units = 50, return_sequences = True))
-                    # model.add(Attention(return_sequences = True))
-                    model.add(Dropout(0.2))
-
-                    model.add(LSTM(units = 50, return_sequences = True))
-                    # model.add(Attention(return_sequences = True))
-                    model.add(Dropout(0.2))
-
-                    model.add(LSTM(units = 50, return_sequences = True))
-                    # model.add(Attention(return_sequences = True))
-                    model.add(Dropout(0.2))
-
-                    model.add(LSTM(units = 50))
-                    model.add(Dropout(0.2))
-
-                    # Adding the output layer
-                    model.add(Dense(units = 1))
-                    model.summary()
-
-
-                    model.compile(optimizer = 'adam', loss = 'mean_squared_error')
-                    model.fit(X_train, y_train, epochs = 10, batch_size = 128)
-                
-                elif model_name == "gru":
-
-                    # The GRU architecture
-                    model = Sequential()
-
-                    model.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-                    model.add(Dropout(0.2))
-
-                    model.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-                    model.add(Dropout(0.2))
-
-                    model.add(GRU(units=50, return_sequences=True, input_shape=(X_train.shape[1],1)))
-                    model.add(Dropout(0.2))
-
-                    model.add(GRU(units=50))
-                    model.add(Dropout(0.2))
-
-                    model.add(Dense(units=1))
-                    model.summary()
-
-                    model.compile(optimizer='adam', loss='mean_squared_error')
-                    model.fit(X_train, y_train, epochs=15, batch_size=128)
-
-                model.save(f"D:/umz/دروس/ترم8/Project/mysite/dashboard/models/{model_name}/{symbol_name}/")
-
-
-            #--- Scaling the testing data and preparing input sequences for prediction
-            df_volume = np.vstack((train, test))
-
-            # Select the portion of df_volume that corresponds to the inputs for testing
-            inputs = df_volume[df_volume.shape[0] - test.shape[0] - window:]
-            # Reshape the inputs array to have a single column
-            inputs = inputs.reshape(-1,1)
-            inputs = sc.transform(inputs)
-
-            # number of samples available for testing
-            num_2 = df_volume.shape[0] - num_shape + window
-
-            X_test = []
-
-            # Each input sequence is created by reshaping a portion of the inputs data.
-            for i in range(window, num_2):
-                X_test_ = np.reshape(inputs[i-window:i, 0], (window, 1))
-                X_test.append(X_test_)
-                
-            X_test = np.stack(X_test)
-
-
-            predict = model.predict(X_test)
-            predict = sc.inverse_transform(predict)
-
-            predict_length = len(predict)
-            test_length = len(test)
-
-
-            if predict_length == test_length:
-                diff = predict - test
-            elif predict_length > test_length:
-                # predict.pop()
-                predict = predict[:predict_length-1]
-                diff = predict - test
-            else:
-                # test.pop()
-                test = test[:test_length-1]
-                diff = predict - test
-
-
-            print("MSE:", np.mean(diff**2))
-            print("MAE:", np.mean(abs(diff)))
-            print("RMSE:", np.sqrt(np.mean(diff**2)))
-
-            # n day predict
-            # Copy the last predicted value
-            pred_ = predict[-1].copy()
-            prediction_full = []
-            window = 60
-            df_copy = df.iloc[:, 1:2][1:].values
-
-            predict_days = round(predict_days/2)
-
-            for j in range(predict_days):
-                df_ = np.vstack((df_copy, pred_))
-                train_ = df_[:num_shape]
-                test_ = df_[num_shape:]
-                
-                df_volume_ = np.vstack((train_, test_))
-
-                inputs_ = df_volume_[df_volume_.shape[0] - test_.shape[0] - window:]
-                inputs_ = inputs_.reshape(-1,1)
-                inputs_ = sc.transform(inputs_)
-
-                X_test_2 = []
-
-                for k in range(window, num_2):
-                    X_test_3 = np.reshape(inputs_[k-window:k, 0], (window, 1))
-                    X_test_2.append(X_test_3)
-
-                X_test_ = np.stack(X_test_2)
-                predict_ = model.predict(X_test_)
-                pred_ = sc.inverse_transform(predict_)
-                # Append the last predicted value (pred_[-1][0])
-                prediction_full.append(pred_[-1][0])
-                df_copy = df_[j:]
-
-
-            prediction_full_new = np.vstack((predict, np.array(prediction_full).reshape(-1,1)))
-
-            # concat predicted date to dates
-            df_date = df[['Date']]
-            # print(df_date)
-            for h in range(predict_days):
-                df_date_add = pd.to_datetime(df_date['Date'].iloc[-1]) + pd.DateOffset(hours=2)
-                df_date_add = pd.DataFrame([df_date_add.strftime("%Y-%m-%d %H:%M")], columns=['Date'])
-                df_date = pd.concat([df_date, df_date_add])
-            df_date = df_date.reset_index(drop=True)
-
-
-            # plt.figure(figsize=(20,7))
-            plt.plot(df['Date'].values[num_shape+50:], df_volume[num_shape+50:], color = 'red', label = f'Real {coin_name} Price')
-            plt.plot(df_date['Date'][-prediction_full_new.shape[0]+50:].values, prediction_full_new[50:], color = 'blue', label = f'Predicted {coin_name} Price')
-            plt.xticks(np.arange(0,df[num_shape:].shape[0],12))
-            plt.title(f'{coin_name} Price Prediction')
-            plt.xlabel('Date')
-            plt.ylabel('Price ($)')
-            plt.legend()
-            # plt.show()
-
-            # # Generate the plot
-            # x = [1, 2, 3, 4, 5]
-            # y = [3, 5, 2, 6, 1]
-            # plt.plot(x, y)
-            # plt.xlabel('X')
-            # plt.ylabel('Y')
-            # plt.title('Sample Plot')
-            
-            # Save the plot to a BytesIO object
-            buffer = BytesIO()
-            plt.savefig(buffer, format='png')
-            plt.close()
-            
-            # Convert the plot image to base64
-            buffer.seek(0)
-            plot_data = base64.b64encode(buffer.read()).decode('utf-8')
-
-            context = {
-                'symbol_name': symbol_name,
-                'model_name': model_name,
-                'predict_days': predict_days,
-                'form': form,
-                'plot_data': plot_data
-            }
-        else:
-            context = {
-                'symbol_name': symbol_name,
-                'form': form
-            }
         return render(request, self.template_name, context)
+
+
+class NewsCrawlView(View):
+    def post(self, request, symbol_name):
+        symbol = symbol_name.strip().upper()
+        if not SYMBOL_PATTERN.fullmatch(symbol):
+            messages.error(request, "The asset symbol contains unsupported characters.")
+            return redirect("dashboard")
+
+        try:
+            result = news_service.crawl_asset_news(symbol)
+        except Exception as exc:
+            messages.error(request, f"Could not crawl news for {symbol}: {exc}")
+        else:
+            messages.success(
+                request,
+                f"{symbol} news updated: fetched {result['fetched']} relevant "
+                f"articles; {result['saved']} total saved.",
+            )
+        return redirect("predict", symbol_name=symbol)

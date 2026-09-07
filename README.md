@@ -6,8 +6,8 @@ repository contains:
 
 - an improved, leakage-aware command-line forecasting pipeline that combines
   market candles with timestamped asset news;
-- a Django dashboard for selecting an asset and running the original LSTM or
-  GRU demonstration; and
+- a Django dashboard for selecting an asset and running the improved LSTM or
+  GRU pipeline; and
 - sample OHLCV datasets for the symbols displayed by the dashboard.
 
 > **Important:** The forecasts are experimental and are not financial advice.
@@ -195,8 +195,8 @@ last-price baseline.
 
 ## Run the Django dashboard
 
-The dashboard is a separate, original demonstration pipeline. Start it from the
-`mysite` directory so its relative dataset paths resolve correctly:
+The dashboard uses the same improved pipeline as `improved_lstm.py` and
+`improved_gru.py`. Start it from the `mysite` directory:
 
 ```bash
 source venv/bin/activate
@@ -205,14 +205,29 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Open <http://127.0.0.1:8000/> and select a symbol. The first prediction request
-may train a model and can take some time.
+Open <http://127.0.0.1:8000/>, select an asset, choose Improved GRU or Improved
+LSTM, and enter the number of forecast steps. One step is one candle interval
+in the selected CSV (one hour for the bundled hourly datasets). The request
+trains a model, so it can take several minutes on a CPU. The result page shows
+actual prices, one-step test predictions, future predictions, error metrics,
+directional accuracy, and estimated bullish/bearish probabilities.
+
+For historical prices, select **Use project /data CSV** to use the bundled file
+for that asset, or **Choose CSV from this computer** to upload a CSV of up to
+50 MB. Uploaded price files are used temporarily for one training request and
+are deleted afterward.
+
+Use **Crawl news** beside an asset, or on its forecast page, to fetch the latest
+seven days of relevant RSS headlines into `data/news/<SYMBOL>_news.csv`. Existing
+rows are retained and deduplicated. A later training run automatically includes
+that news file when **Price + crawled news** is selected and its dates overlap
+the market dataset. Select **Price data only** to train while ignoring news.
+Each asset page lists its latest 25 saved headlines with publication time,
+source, link, and the crawler's asset-impact score.
 
 The Django code is configured for local development (`DEBUG=True`) and must not
 be deployed publicly without production settings, a private secret key, and
-appropriate allowed hosts. The legacy model-save fallback in
-`dashboard/views.py` also contains a machine-specific Windows path; change it
-to a valid local path before relying on automatic model persistence.
+appropriate allowed hosts.
 
 ## Project layout
 
@@ -231,9 +246,8 @@ requirements.txt                pinned Python dependencies
 - Forecast quality depends heavily on data coverage, timestamp consistency,
   asset-specific news scoring, and hyperparameter selection.
 - Future forecasts assume no new news after the final observed candle.
-- The improved command-line models are not automatically loaded by the legacy
-  Django prediction view; the two workflows currently save and consume models
-  in different formats and locations.
+- Dashboard training is synchronous. For a multi-user or production deployment,
+  move training into a background job queue and return job progress to the UI.
 - Several scripts in `code/` are experiments or older utilities. For new
   training runs, prefer `improved_lstm.py` or `improved_gru.py`.
 

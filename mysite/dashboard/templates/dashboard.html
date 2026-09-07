@@ -1,51 +1,55 @@
 {% extends 'base.html' %}
-{% comment %} {% load static %} {% endcomment %}
-
-{% comment %} {% block link %}
-    <link rel="stylesheet" href="{% static 'styles.css' %}">
-{% endblock %} {% endcomment %}
 
 {% block content %}
-    <div class="py-5 text-center row">
-        <div class="col-md-4">
-            <h4 class="text-light pb-2"> Forex </h4>
-            <hr class="text-light w-75" style="margin: 0 auto;">
-            <ul class="list-unstyled pt-4">
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='EUR' %}">EUR</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='GBP' %}">GBP</a></li>
-
-            </ul>
-        </div>
-        <div class="col-md-4">
-            <h4 class="text-light pb-2"> Crypto </h4>
-            <hr class="text-light w-75" style="margin: 0 auto;">
-            <ul class="list-unstyled pt-4">
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='ADA' %}">ADA</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='BTC' %}">BTC</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='ETH' %}">ETH</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='LNK' %}">LNK</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='LTC' %}">LTC</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='MAT' %}">MAT</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='TRX' %}">TRX</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='UNI' %}">UNI</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XAG' %}">XAG</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XAU' %}">XAU</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='XLM' %}">XLM</a></li>
-            </ul>
-        </div>
-        <div class="col-md-4">
-            <h4 class="text-light pb-2"> Stocks (US) </h4>
-            <hr class="text-light w-75" style="margin: 0 auto;">
-            <ul class="list-unstyled pt-4">
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='AAPL' %}">AAPL</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='AMZN' %}">AMZN</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='GOOGL' %}">GOOGL</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='IBM' %}">IBM</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='INTC' %}">INTC</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='NFLX' %}">NFLX</a></li>
-                <li class="p-1"><a class="text-decoration-none text-light" href="{% url 'predict' symbol_name='TSLA' %}">TSLA</a></li>
-            </ul>
-        </div>
+<main class="container py-5 text-light">
+    <div class="text-center mb-5">
+        <h1 class="display-5">Market prediction dashboard</h1>
+        <p class="text-white-50">Choose an asset, then train an improved GRU or LSTM model.</p>
     </div>
 
+    {% if asset_groups %}
+    <div class="row g-4 justify-content-center">
+        {% for category, symbols in asset_groups.items %}
+        <section class="col-sm-6 col-lg-4">
+            <div class="card h-100 bg-secondary bg-opacity-25 border-secondary">
+                <div class="card-body">
+                    <h2 class="h5 card-title">{{ category }}</h2>
+                    <div class="d-grid gap-2 mt-3">
+                        {% for symbol in symbols %}
+                        <div class="btn-group" role="group" aria-label="Actions for {{ symbol }}">
+                            <a class="btn btn-outline-light" href="{% url 'predict' symbol_name=symbol %}">{{ symbol }} forecast</a>
+                            <form class="news-crawl-form d-flex" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
+                                {% csrf_token %}
+                                <button class="btn btn-outline-info rounded-start-0" type="submit">Crawl news</button>
+                            </form>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="alert alert-warning">
+        No market CSV files were found under the project <code>data/</code> directory.
+    </div>
+    {% endif %}
+
+    <p class="small text-white-50 text-center mt-5">
+        Experimental forecasts only — not financial advice.
+    </p>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll('.news-crawl-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Crawling…';
+        });
+    });
+</script>
 {% endblock %}

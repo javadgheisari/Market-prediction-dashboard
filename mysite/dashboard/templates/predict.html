@@ -1,66 +1,181 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="py-5 text-center">
-    <a class="text-decoration-none text-light mx-1" href="{% url 'dashboard' %}">
-        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" fill="currentColor" class="bi bi-house-fill" viewBox="0 0 16 16">
-          <path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L8 2.207l6.646 6.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.707 1.5Z"/>
-          <path d="m8 3.293 6 6V13.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 13.5V9.293l6-6Z"/>
-        </svg>
-    </a> 
-    <p class='text-light mt-2'>Selected Name: {{ symbol_name }}</p>
-    <p class='text-light'>Model Name: {{ model_name }}</p>
-    <p class='text-light'>Prediction Hours: {{ predict_days }}</p>
+<main class="container py-4 text-light">
+    <a class="btn btn-sm btn-outline-light mb-4" href="{% url 'dashboard' %}">&larr; Choose another asset</a>
 
-    {% if plot_data %}
-    <img class="p-3" src="data:image/png;base64,{{ plot_data }}" alt="Plot" height="600" ,width="900">
-    {% endif %}
+    <div class="row g-4">
+        <section class="col-lg-4">
+            <div class="card bg-secondary bg-opacity-25 border-secondary text-light">
+                <div class="card-body">
+                    <h1 class="h3">{{ symbol_name }}</h1>
+                    <p class="text-white-50">Select a model and forecast horizon.</p>
 
-    {% comment %} {% if plot_data %}
-        <div id="plot-container"></div>
-        <script>
-            // Get the base64-encoded plot data from the server
-            var plotData = "{{ plot_data }}";
-        
-            // Decode the base64-encoded plot data
-            var plotDataDecoded = atob(plotData);
-        
-            // Convert the plot data to an array buffer
-            var plotDataArray = new Uint8Array(plotDataDecoded.length);
-            for (var i = 0; i < plotDataDecoded.length; i++) {
-                plotDataArray[i] = plotDataDecoded.charCodeAt(i);
-            }
-        
-            // Create a blob from the array buffer
-            var plotBlob = new Blob([plotDataArray], { type: 'image/png' });
-        
-            // Create a URL for the blob
-            var plotURL = URL.createObjectURL(plotBlob);
-        
-            // Create the plot using Plotly
-            var container = document.getElementById('plot-container');
-            Plotly.newPlot(container, [{
-                type: 'scatter',
-                mode: 'lines',
-                x: [1, 2, 3, 4, 5],
-                y: [3, 5, 2, 6, 1]
-            }], {
-                title: 'Sample Plot',
-                xaxis: { title: 'X' },
-                yaxis: { title: 'Y' }
-            });
-        
-            // Set the plot image source to the URL
-            container.querySelector('img').src = plotURL;
-        </script>
-    {% endif %} {% endcomment %}
-    
-    <hr class="text-light w-75" style="margin: 0 auto;">
-    <form class="pt-5" method="post">
-        {% csrf_token %}
-        {{ form.as_p }}
-        <button type="submit">Submit</button>
-    </form>
-</div>
+                    {% if error %}
+                    <div class="alert alert-danger" role="alert">{{ error }}</div>
+                    {% endif %}
 
-{% endblock content %}
+                    <form method="post" enctype="multipart/form-data" id="forecast-form">
+                        {% csrf_token %}
+                        {% for field in form %}
+                        <div class="mb-3"{% if field.name == 'market_csv' %} id="market-csv-field"{% endif %}>
+                            <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.help_text %}<div class="form-text text-white-50">{{ field.help_text }}</div>{% endif %}
+                            {% for field_error in field.errors %}<div class="text-danger small">{{ field_error }}</div>{% endfor %}
+                        </div>
+                        {% endfor %}
+                        <button class="btn btn-primary w-100" id="forecast-submit" type="submit">Train and forecast</button>
+                    </form>
+                    <form class="news-crawl-form mt-2" method="post" action="{% url 'crawl_news' symbol_name=symbol_name %}">
+                        {% csrf_token %}
+                        <button class="btn btn-outline-info w-100" type="submit">Crawl latest {{ symbol_name }} news</button>
+                    </form>
+                    <p class="small text-white-50 mt-3 mb-0">Training runs during this request and can take several minutes on a CPU.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="col-lg-8">
+            {% if chart_data %}
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <span class="badge bg-secondary">{{ model_name }}</span>
+                <span class="badge bg-secondary">{{ predict_steps }} steps</span>
+                {% if price_source == 'upload' %}
+                <span class="badge bg-warning text-dark">Uploaded price CSV</span>
+                {% else %}
+                <span class="badge bg-secondary">Project /data CSV</span>
+                {% endif %}
+                {% if chart_data.metrics.news_enabled %}
+                <span class="badge bg-info text-dark">Price + news</span>
+                {% else %}
+                <span class="badge bg-secondary">Price only</span>
+                {% endif %}
+            </div>
+            <div class="row g-2 mb-3 text-center">
+                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>MAE</small><br>{{ chart_data.metrics.mae|floatformat:4 }}</div></div>
+                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>RMSE</small><br>{{ chart_data.metrics.rmse|floatformat:4 }}</div></div>
+                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Direction accuracy</small><br>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</div></div>
+                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Bullish / bearish</small><br>{{ chart_data.metrics.bullish_percent|floatformat:1 }}% / {{ chart_data.metrics.bearish_percent|floatformat:1 }}%</div></div>
+            </div>
+            <div id="price-chart" style="width: 100%; height: 620px;"></div>
+            {{ chart_data|json_script:"chart-data" }}
+            {% else %}
+            <div class="h-100 d-flex align-items-center justify-content-center border border-secondary rounded p-5 text-white-50">
+                The actual, test-prediction, and future-prediction chart will appear here.
+            </div>
+            {% endif %}
+        </section>
+    </div>
+
+    <section class="card bg-secondary bg-opacity-25 border-secondary text-light mt-4">
+        <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+                <h2 class="h5 mb-0">Saved {{ symbol_name }} news</h2>
+                <small class="text-white-50">{{ asset_news.total }} article{{ asset_news.total|pluralize }} saved; showing the latest 25</small>
+            </div>
+            <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol_name %}">
+                {% csrf_token %}
+                <button class="btn btn-sm btn-outline-info" type="submit">Refresh news</button>
+            </form>
+        </div>
+        <div class="card-body p-0">
+            {% if asset_news.rows %}
+            <div class="table-responsive">
+                <table class="table table-dark table-striped table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th scope="col">Published</th>
+                            <th scope="col">Headline</th>
+                            <th scope="col">Source</th>
+                            <th scope="col" class="text-end">Impact</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for article in asset_news.rows %}
+                        <tr>
+                            <td class="text-nowrap"><small>{{ article.published_at }}</small></td>
+                            <td>
+                                {% if article.url %}
+                                <a class="link-light" href="{{ article.url }}" target="_blank" rel="noopener noreferrer">{{ article.headline }}</a>
+                                {% else %}
+                                {{ article.headline }}
+                                {% endif %}
+                            </td>
+                            <td>{{ article.source|default:"—" }}</td>
+                            <td class="text-end {% if article.impact > 0 %}text-success{% elif article.impact < 0 %}text-danger{% else %}text-white-50{% endif %}">
+                                {{ article.impact|floatformat:2 }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="p-4 text-center text-white-50">
+                No saved news for {{ symbol_name }} yet. Click “Refresh news” to crawl it.
+            </div>
+            {% endif %}
+        </div>
+    </section>
+</main>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const priceSource = document.getElementById('id_price_source');
+    const marketCsvField = document.getElementById('market-csv-field');
+    function updateMarketCsvVisibility() {
+        marketCsvField.hidden = priceSource.value !== 'upload';
+    }
+    priceSource.addEventListener('change', updateMarketCsvVisibility);
+    updateMarketCsvVisibility();
+
+    document.getElementById('forecast-form').addEventListener('submit', function () {
+        const button = document.getElementById('forecast-submit');
+        button.disabled = true;
+        button.textContent = 'Training model…';
+    });
+    document.querySelectorAll('.news-crawl-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Crawling news…';
+        });
+    });
+</script>
+{% if chart_data %}
+<script>
+    (function () {
+        const chart = document.getElementById('price-chart');
+        if (typeof Plotly === 'undefined') {
+            chart.innerHTML = '<div class="alert alert-warning">The Plotly chart library could not be loaded. Check your internet connection or browser content blocker, then refresh this page.</div>';
+            return;
+        }
+
+        const data = JSON.parse(document.getElementById('chart-data').textContent);
+        const common = {
+            type: 'scatter',
+            mode: 'lines',
+            hovertemplate: '%{x}<br>%{y:,.5f}<extra>%{fullData.name}</extra>'
+        };
+        Plotly.newPlot(chart, [
+            {...common, name: 'Actual price', x: data.actual_dates, y: data.actual_prices, line: {color: '#22c55e', width: 2}},
+            {...common, name: 'Test forecast', x: data.test_dates, y: data.test_predictions, line: {color: '#60a5fa', width: 2}},
+            {...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}}
+        ], {
+            title: {text: data.title, font: {color: '#f8f9fa'}},
+            paper_bgcolor: '#212529',
+            plot_bgcolor: '#212529',
+            font: {color: '#f8f9fa'},
+            xaxis: {title: 'Date', gridcolor: '#495057'},
+            yaxis: {title: 'Price', gridcolor: '#495057'},
+            legend: {orientation: 'h', y: 1.08},
+            hovermode: 'x unified',
+            margin: {l: 70, r: 25, t: 80, b: 70}
+        }, {responsive: true, displaylogo: false});
+    })();
+</script>
+{% endif %}
+{% endblock %}

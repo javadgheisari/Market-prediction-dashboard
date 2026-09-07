@@ -213,6 +213,59 @@ def load_assets(path: Path) -> dict[str, dict[str, object]]:
     return {str(symbol).upper(): value for symbol, value in assets.items()}
 
 
+def crawl_asset_news(
+    symbol: str,
+    *,
+    config_path: Path = DEFAULT_CONFIG,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    days: int = 7,
+    max_per_asset: int = 100,
+    timeout: float = 20.0,
+    feed_template: str = DEFAULT_FEED_TEMPLATE,
+    session: requests.Session | None = None,
+) -> dict[str, object]:
+    """Fetch, score, merge, and save recent news for one configured asset."""
+    if days < 1 or max_per_asset < 1 or timeout <= 0:
+        raise ValueError("days, max_per_asset, and timeout must be positive")
+
+    normalized_symbol = symbol.strip().upper()
+    assets = load_assets(config_path)
+    if normalized_symbol not in assets:
+        raise ValueError(f"Unknown asset: {normalized_symbol}")
+
+    definition = assets[normalized_symbol]
+    query = str(definition["query"])
+    terms = [str(term) for term in definition.get("terms", [normalized_symbol])]
+    feed_url = feed_template.format(query=quote_plus(f"{query} when:{days}d"))
+    client = session or requests.Session()
+    client.headers.setdefault(
+        "User-Agent", "MarketPredictionDashboard/1.0 (RSS news collector)"
+    )
+
+    articles = fetch_feed(client, feed_url, timeout)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    articles = [
+        article
+        for article in articles
+        if article.published_at >= cutoff and is_relevant(article.headline, terms)
+    ]
+    articles = sorted(
+        articles, key=lambda item: item.published_at, reverse=True
+    )[:max_per_asset]
+    path = output_dir / f"{normalized_symbol}_news.csv"
+    merged = merge_rows(
+        read_existing(path),
+        [article_row(article, terms) for article in articles],
+    )
+    write_rows(path, merged)
+    return {
+        "symbol": normalized_symbol,
+        "fetched": len(articles),
+        "saved": len(merged),
+        "path": path,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", nargs="+", help="Symbols to collect; default: every configured asset")
@@ -238,25 +291,23 @@ def main() -> int:
 
     session = requests.Session()
     session.headers["User-Agent"] = "MarketPredictionDashboard/1.0 (RSS news collector)"
-    cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
     failures = 0
     for index, symbol in enumerate(selected):
-        definition = assets[symbol]
-        query = str(definition["query"])
-        terms = [str(term) for term in definition.get("terms", [symbol])]
-        feed_url = args.feed_template.format(query=quote_plus(f"{query} when:{args.days}d"))
         try:
-            articles = fetch_feed(session, feed_url, args.timeout)
-            articles = [
-                article
-                for article in articles
-                if article.published_at >= cutoff and is_relevant(article.headline, terms)
-            ]
-            articles = sorted(articles, key=lambda item: item.published_at, reverse=True)[: args.max_per_asset]
-            path = args.output_dir / f"{symbol}_news.csv"
-            merged = merge_rows(read_existing(path), [article_row(item, terms) for item in articles])
-            write_rows(path, merged)
-            print(f"{symbol}: fetched {len(articles)}, saved {len(merged)} -> {path}")
+            result = crawl_asset_news(
+                symbol,
+                config_path=args.config,
+                output_dir=args.output_dir,
+                days=args.days,
+                max_per_asset=args.max_per_asset,
+                timeout=args.timeout,
+                feed_template=args.feed_template,
+                session=session,
+            )
+            print(
+                f"{symbol}: fetched {result['fetched']}, "
+                f"saved {result['saved']} -> {result['path']}"
+            )
         except (requests.RequestException, ET.ParseError, OSError, ValueError) as error:
             failures += 1
             print(f"{symbol}: failed: {error}")
