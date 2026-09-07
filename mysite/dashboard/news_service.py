@@ -47,6 +47,7 @@ def load_asset_news(symbol: str, limit: int = 25) -> dict[str, object]:
             impact = 0.0
         display_rows.append(
             {
+                "published_iso": raw_date,
                 "published_at": published_at,
                 "headline": row.get("headline", ""),
                 "source": row.get("source", ""),

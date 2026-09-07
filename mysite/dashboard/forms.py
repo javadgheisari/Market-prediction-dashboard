@@ -1,6 +1,7 @@
 from django import forms
 
 MODEL_CHOICES = (
+    ("xgboost", "XGBoost"),
     ("gru", "Improved GRU"),
     ("lstm", "Improved LSTM"),
 )

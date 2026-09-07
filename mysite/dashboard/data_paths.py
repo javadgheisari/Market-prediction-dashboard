@@ -78,14 +78,14 @@ def resolve_data_csv(symbol: str) -> Path:
         )
 
     def rank(path: Path) -> tuple:
-        name = path.name.upper()
-        hour_score = 1 if "HOUR" in name else 0
-        minute_penalty = -1 if "MINUTE" in name else 0
-        symbol_score = 2 if f"{symbol}-USD" in name else 1
+        # Filename conventions vary (XAUUSD, XAU-USD, and XAU), so punctuation
+        # must not make a short export outrank a substantially longer history.
+        # Size is a cheap, deterministic proxy for the number of candles.
+        data_size = path.stat().st_size
         category_boost = (
             1 if symbol in {"XAU", "XAG"} and "gold" in path.parts else 0
         )
-        return (symbol_score, category_boost, hour_score + minute_penalty, path.stat().st_mtime)
+        return (category_boost, data_size, path.stat().st_mtime)
 
     return max(candidates, key=rank)
 

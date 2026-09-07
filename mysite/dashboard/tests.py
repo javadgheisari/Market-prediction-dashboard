@@ -11,6 +11,7 @@ from dashboard.data_paths import list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
 from dashboard.forecaster import build_plotly_chart
 from dashboard.news_service import load_asset_news
+from sequence_forecaster import calibrate_return_scales, load_market_data
 
 
 class DataPathTests(SimpleTestCase):
@@ -24,6 +25,9 @@ class DataPathTests(SimpleTestCase):
 
     def test_symbol_resolves_to_existing_csv(self):
         self.assertTrue(resolve_data_csv("BTC").is_file())
+
+    def test_xau_uses_the_most_complete_bundled_history(self):
+        self.assertEqual(resolve_data_csv("XAU").name, "XAUUSD_M15.csv")
 
 
 class ForecastFormTests(SimpleTestCase):
@@ -48,6 +52,16 @@ class ForecastFormTests(SimpleTestCase):
                 }
             ).is_valid()
         )
+        self.assertTrue(
+            NameForm(
+                {
+                    "model_name": "xgboost",
+                    "data_source": "price_only",
+                    "price_source": "bundled",
+                    "predict_steps": 24,
+                }
+            ).is_valid()
+        )
 
 
 class DashboardViewTests(SimpleTestCase):
@@ -62,6 +76,26 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertContains(response, "Saved BTC news")
         self.assertContains(response, "Refresh news")
+
+    @patch("dashboard.views.news_service.load_asset_news")
+    def test_news_impact_chart_is_available_for_news_selection(self, load_news):
+        load_news.return_value = {
+            "total": 1,
+            "path": Path("news.csv"),
+            "rows": [{
+                "published_iso": "2026-09-02T10:00:00+00:00",
+                "published_at": "2026-09-02 10:00 UTC",
+                "headline": "Market update",
+                "source": "Example",
+                "url": "https://example.com/news",
+                "impact": 0.7,
+            }],
+        }
+        response = self.client.get(reverse("predict", kwargs={"symbol_name": "BTC"}))
+
+        self.assertContains(response, 'id="news-impact-section"')
+        self.assertContains(response, 'id="news-impact-chart"')
+        self.assertContains(response, "dataSource.value === 'with_news'")
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
     def test_prediction_post_renders_chart(self, run_forecast):
@@ -194,11 +228,32 @@ class ChartAdapterTests(SimpleTestCase):
                     "bullish_percent": 70.0,
                     "bearish_percent": 30.0,
                 },
+                "validation_selected_return_scales": [0.0, 0.0],
                 "news": None,
             }
         )
         self.assertEqual(result["metrics"]["bullish_percent"], 70.0)
         self.assertFalse(result["metrics"]["news_enabled"])
+        self.assertTrue(result["metrics"]["forecast_is_naive"])
+
+    def test_each_forecast_horizon_gets_its_own_calibration(self):
+        actual = [[1.0, 1.0], [-1.0, -1.0], [1.0, 1.0], [-1.0, -1.0]]
+        predicted = [[-1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, -1.0]]
+
+        scales = calibrate_return_scales(actual, predicted)
+
+        self.assertEqual(scales[0], 0.0)
+        self.assertEqual(scales[1], 1.0)
+
+    def test_split_decimal_comma_volume_is_reconstructed(self):
+        upload = "Date,Close,Volume,\n2026-09-01 00:00,100,15,761\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "market.csv"
+            path.write_text(upload, encoding="utf-8")
+            frame = load_market_data(path, "Date", "Close")
+
+        self.assertAlmostEqual(frame["Volume"].iloc[0], 15.761)
+        self.assertNotIn("Unnamed: 3", frame)
 
 
 class NewsDisplayTests(SimpleTestCase):
@@ -243,4 +298,7 @@ class NewsDisplayTests(SimpleTestCase):
 
         self.assertEqual(result["total"], 2)
         self.assertEqual(result["rows"][0]["headline"], "Newer")
+        self.assertEqual(
+            result["rows"][0]["published_iso"], "2026-09-02T10:00:00+00:00"
+        )
         self.assertEqual(result["rows"][0]["url"], "")

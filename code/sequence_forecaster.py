@@ -142,6 +142,24 @@ def load_market_data(path: Path, date_col: str, close_col: str) -> pd.DataFrame:
         )
 
     df = df.copy()
+    # Some broker exports leave a decimal-comma volume unquoted. A value such
+    # as ``15,761`` is parsed as Volume=15 and an unnamed column=761. Restore
+    # it as 15.761 before feature engineering.
+    unnamed_columns = [
+        column for column in df.columns if str(column).startswith("Unnamed:")
+    ]
+    if "Volume" in df and len(unnamed_columns) == 1:
+        fractional_column = unnamed_columns[0]
+        whole = pd.to_numeric(df["Volume"], errors="coerce")
+        fractional_text = df[fractional_column].astype("string").str.strip()
+        fractional = pd.to_numeric(fractional_text, errors="coerce")
+        split_volume = whole.notna() & fractional.notna() & fractional.ge(0)
+        if split_volume.all():
+            denominators = fractional_text.str.len().map(
+                lambda width: 10 ** int(width)
+            )
+            df["Volume"] = whole + fractional / denominators
+            df = df.drop(columns=[fractional_column])
     df[date_col] = parse_datetimes(df[date_col])
     numeric_candidates = {"Open", "High", "Low", "Close", "Volume", close_col}
     for column in numeric_candidates.intersection(df.columns):
@@ -522,6 +540,35 @@ def calibrate_return_scale(
     return float(candidates[int(np.argmin(errors))])
 
 
+def calibrate_return_scales(
+    actual_returns: np.ndarray,
+    predicted_returns: np.ndarray,
+) -> np.ndarray:
+    """Select an independent validation shrinkage for each forecast step."""
+    actual = np.asarray(actual_returns, dtype=float)
+    predicted = np.asarray(predicted_returns, dtype=float)
+    if actual.ndim == 1:
+        actual = actual[:, None]
+    if predicted.ndim == 1:
+        predicted = predicted[:, None]
+    if actual.shape != predicted.shape:
+        raise ValueError(
+            "Actual and predicted validation returns must have matching shapes."
+        )
+
+    candidates = np.linspace(0.0, 1.0, 51)
+    scales = []
+    for horizon in range(actual.shape[1]):
+        errors = [
+            mean_absolute_error(
+                actual[:, horizon], predicted[:, horizon] * candidate
+            )
+            for candidate in candidates
+        ]
+        scales.append(candidates[int(np.argmin(errors))])
+    return np.asarray(scales, dtype=float)
+
+
 def estimate_direction_probabilities(
     future_returns: np.ndarray,
     validation_actual_returns: np.ndarray,
@@ -586,6 +633,7 @@ def save_outputs(
     feature_scaler: RobustScaler,
     target_scaler: StandardScaler,
     return_scale: float,
+    return_scales: np.ndarray,
     config: ForecastConfig,
     feature_names: list[str],
     news_metadata: dict[str, Any] | None,
@@ -617,6 +665,7 @@ def save_outputs(
                 "feature_scaler": feature_scaler,
                 "target_scaler": target_scaler,
                 "return_scale": return_scale,
+                "return_scales": return_scales.tolist(),
                 "feature_names": feature_names,
                 "news_metadata": news_metadata,
                 "config": asdict(config),
@@ -907,18 +956,22 @@ def train_and_forecast(
     validation_scaled = model.predict(
         x_validation, batch_size=config.batch_size, verbose=0
     )
-    validation_returns = target_scaler.inverse_transform(
-        validation_scaled[:, :1]
-    ).ravel()
+    validation_returns_by_horizon = target_scaler.inverse_transform(
+        validation_scaled.reshape(-1, 1)
+    ).reshape(validation_scaled.shape)
+    validation_actual_returns_by_horizon = target_scaler.inverse_transform(
+        y_validation.reshape(-1, 1)
+    ).reshape(y_validation.shape)
+    return_scales = calibrate_return_scales(
+        validation_actual_returns_by_horizon,
+        validation_returns_by_horizon,
+    )
+    validation_returns = validation_returns_by_horizon[:, 0]
     validation_indexes = np.arange(
         validation_start, validation_start + len(x_validation)
     )
-    return_scale = calibrate_return_scale(
-        actual_close=close[validation_indexes],
-        previous_close=close[validation_indexes - 1],
-        predicted_returns=validation_returns,
-    )
-    print(f"Validation-selected return scale: {return_scale:.2f}")
+    return_scale = float(return_scales[0])
+    print(f"Validation-selected return scales: {return_scales.tolist()}")
 
     # Walk-forward evaluation: every prediction uses actual candles observed
     # before its timestamp, never the candle it is predicting.
@@ -960,13 +1013,16 @@ def train_and_forecast(
         "test_samples": len(actual_test),
         "news": news_metadata,
         "validation_selected_return_scale": return_scale,
+        "validation_selected_return_scales": return_scales.tolist(),
         "model_metrics": model_metrics,
         "raw_unscaled_model_metrics": raw_model_metrics,
         "naive_last_price_baseline": baseline_metrics,
     }
     final_window = scaled_features[-config.window :][None, ...].astype(np.float32)
     future_scaled = model.predict(final_window, verbose=0)[0].reshape(-1, 1)
-    future_returns = target_scaler.inverse_transform(future_scaled).ravel() * return_scale
+    future_returns = (
+        target_scaler.inverse_transform(future_scaled).ravel() * return_scales
+    )
     future_predictions = close[-1] * np.exp(np.cumsum(future_returns))
     validation_actual_returns = log_returns[validation_indexes, 0]
     direction_probabilities = estimate_direction_probabilities(
@@ -1014,6 +1070,7 @@ def train_and_forecast(
         feature_scaler=feature_scaler,
         target_scaler=target_scaler,
         return_scale=return_scale,
+        return_scales=return_scales,
         config=config,
         feature_names=list(features.columns),
         news_metadata=news_metadata,

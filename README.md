@@ -7,7 +7,7 @@ repository contains:
 - an improved, leakage-aware command-line forecasting pipeline that combines
   market candles with timestamped asset news;
 - a Django dashboard for selecting an asset and running the improved LSTM or
-  GRU pipeline; and
+  GRU pipeline or the XGBoost forecaster; and
 - sample OHLCV datasets for the symbols displayed by the dashboard.
 
 > **Important:** The forecasts are experimental and are not financial advice.
@@ -169,6 +169,20 @@ Common options include:
 ```
 
 Run `venv/bin/python code/improved_lstm.py --help` for every option.
+
+### Train XGBoost
+
+XGBoost uses the same causal market/news features and chronological evaluation,
+but trains much faster on the relatively small bundled datasets:
+
+```bash
+venv/bin/python code/improved_xgboost.py \
+  data/crypto/btc/BTC-USD_1Hour_BID_2026-08-05_to_2026-09-05_Asia_Tehran\ \(1\).csv \
+  --date-col Asia/Tehran --forecast-steps 24
+```
+
+It is also available as **XGBoost** in the Django model selector. The CPU-only
+package is pinned to avoid downloading unnecessary GPU runtime libraries.
 
 The pipeline predicts a complete horizon of log returns, fits scalers only on
 the training partition, uses a chronological validation/test split, compares

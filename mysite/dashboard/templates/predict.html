@@ -58,6 +58,11 @@
                 <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Direction accuracy</small><br>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</div></div>
                 <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Bullish / bearish</small><br>{{ chart_data.metrics.bullish_percent|floatformat:1 }}% / {{ chart_data.metrics.bearish_percent|floatformat:1 }}%</div></div>
             </div>
+            {% if chart_data.metrics.forecast_is_naive %}
+            <div class="alert alert-warning" role="alert">
+                Validation found no forecast horizon that beat the unchanged-price baseline. The displayed future line is the conservative baseline, not a model-generated price target.
+            </div>
+            {% endif %}
             <div id="price-chart" style="width: 100%; height: 620px;"></div>
             {{ chart_data|json_script:"chart-data" }}
             {% else %}
@@ -67,6 +72,19 @@
             {% endif %}
         </section>
     </div>
+
+    {% if asset_news.rows %}
+    <section id="news-impact-section" class="card bg-secondary bg-opacity-25 border-secondary text-light mt-4" hidden>
+        <div class="card-header">
+            <h2 class="h5 mb-1">News impact</h2>
+            <small class="text-white-50">Impact scores for the latest saved {{ symbol_name }} articles</small>
+        </div>
+        <div class="card-body">
+            <div id="news-impact-chart" style="width: 100%; height: 380px;" aria-label="{{ symbol_name }} news impact chart"></div>
+        </div>
+    </section>
+    {{ asset_news.rows|json_script:"news-impact-data" }}
+    {% endif %}
 
     <section class="card bg-secondary bg-opacity-25 border-secondary text-light mt-4">
         <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
@@ -126,11 +144,59 @@
 <script>
     const priceSource = document.getElementById('id_price_source');
     const marketCsvField = document.getElementById('market-csv-field');
+    const dataSource = document.getElementById('id_data_source');
+    const newsImpactSection = document.getElementById('news-impact-section');
+    let newsImpactChartRendered = false;
+
     function updateMarketCsvVisibility() {
         marketCsvField.hidden = priceSource.value !== 'upload';
     }
+
+    function renderNewsImpactChart() {
+        if (newsImpactChartRendered || !newsImpactSection) return;
+        const chart = document.getElementById('news-impact-chart');
+        if (typeof Plotly === 'undefined') {
+            chart.innerHTML = '<div class="alert alert-warning">The Plotly chart library could not be loaded.</div>';
+            return;
+        }
+
+        const articles = JSON.parse(document.getElementById('news-impact-data').textContent);
+        const chronological = articles.slice().reverse();
+        const impacts = chronological.map(article => article.impact);
+        Plotly.newPlot(chart, [{
+            type: 'bar',
+            x: chronological.map(article => article.published_iso || article.published_at),
+            y: impacts,
+            text: chronological.map(article => article.headline),
+            marker: {
+                color: impacts.map(impact => impact > 0 ? '#22c55e' : impact < 0 ? '#ef4444' : '#94a3b8')
+            },
+            hovertemplate: '%{x}<br>%{text}<br>Impact: %{y:.2f}<extra></extra>'
+        }], {
+            paper_bgcolor: '#212529',
+            plot_bgcolor: '#212529',
+            font: {color: '#f8f9fa'},
+            xaxis: {title: 'Published', gridcolor: '#495057'},
+            yaxis: {title: 'Impact score', gridcolor: '#495057', zerolinecolor: '#f8f9fa'},
+            margin: {l: 70, r: 25, t: 20, b: 70}
+        }, {responsive: true, displaylogo: false});
+        newsImpactChartRendered = true;
+    }
+
+    function updateNewsImpactVisibility() {
+        if (!newsImpactSection) return;
+        const showNewsImpact = dataSource.value === 'with_news';
+        newsImpactSection.hidden = !showNewsImpact;
+        if (showNewsImpact) {
+            renderNewsImpactChart();
+            if (newsImpactChartRendered) Plotly.Plots.resize(document.getElementById('news-impact-chart'));
+        }
+    }
+
     priceSource.addEventListener('change', updateMarketCsvVisibility);
+    dataSource.addEventListener('change', updateNewsImpactVisibility);
     updateMarketCsvVisibility();
+    updateNewsImpactVisibility();
 
     document.getElementById('forecast-form').addEventListener('submit', function () {
         const button = document.getElementById('forecast-submit');
