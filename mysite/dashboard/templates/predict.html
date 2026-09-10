@@ -57,6 +57,7 @@
                 <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>RMSE</small><br>{{ chart_data.metrics.rmse|floatformat:4 }}</div></div>
                 <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Direction accuracy</small><br>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</div></div>
                 <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Bullish / bearish</small><br>{{ chart_data.metrics.bullish_percent|floatformat:1 }}% / {{ chart_data.metrics.bearish_percent|floatformat:1 }}%</div></div>
+                <div class="col-12"><div class="p-2 border border-secondary rounded"><small>MAE skill versus unchanged-price baseline</small><br>{{ chart_data.metrics.mae_skill_vs_naive_percent|floatformat:1 }}%</div></div>
             </div>
             {% if chart_data.metrics.forecast_is_naive %}
             <div class="alert alert-warning" role="alert">
@@ -226,11 +227,18 @@
             mode: 'lines',
             hovertemplate: '%{x}<br>%{y:,.5f}<extra>%{fullData.name}</extra>'
         };
-        Plotly.newPlot(chart, [
+        const traces = [
             {...common, name: 'Actual price', x: data.actual_dates, y: data.actual_prices, line: {color: '#22c55e', width: 2}},
-            {...common, name: 'Test forecast', x: data.test_dates, y: data.test_predictions, line: {color: '#60a5fa', width: 2}},
-            {...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}}
-        ], {
+            {...common, name: 'Test forecast', x: data.test_dates, y: data.test_predictions, line: {color: '#60a5fa', width: 2}}
+        ];
+        if (data.future_lower && data.future_upper) {
+            traces.push(
+                {...common, name: '80% interval lower', x: data.future_dates, y: data.future_lower, line: {color: 'rgba(251,146,60,0)'}, hoverinfo: 'skip', showlegend: false},
+                {...common, name: '80% validation-residual interval', x: data.future_dates, y: data.future_upper, line: {color: 'rgba(251,146,60,0)'}, fill: 'tonexty', fillcolor: 'rgba(251,146,60,0.16)'}
+            );
+        }
+        traces.push({...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}});
+        Plotly.newPlot(chart, traces, {
             title: {text: data.title, font: {color: '#f8f9fa'}},
             paper_bgcolor: '#212529',
             plot_bgcolor: '#212529',

@@ -51,6 +51,9 @@ def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
             "directional_accuracy_percent": metrics["model_metrics"][
                 "directional_accuracy_percent"
             ],
+            "mae_skill_vs_naive_percent": metrics["model_metrics"].get(
+                "mae_skill_vs_naive_percent", 0.0
+            ),
             "bullish_percent": metrics["forecast_direction_probability"][
                 "bullish_percent"
             ],

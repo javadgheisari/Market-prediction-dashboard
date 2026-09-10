@@ -184,10 +184,12 @@ venv/bin/python code/improved_xgboost.py \
 It is also available as **XGBoost** in the Django model selector. The CPU-only
 package is pinned to avoid downloading unnecessary GPU runtime libraries.
 
-The pipeline predicts a complete horizon of log returns, fits scalers only on
-the training partition, uses a chronological validation/test split, compares
-one-step test forecasts with a last-price baseline, and selects return
-shrinkage using validation data only.
+The pipeline predicts a complete horizon of log returns, uses a chronological
+validation/test split, compares one-step test forecasts with a last-price
+baseline, and selects return shrinkage using validation data only. XGBoost also
+uses the validation partition for early stopping. Its default single-worker
+setting avoids CPU oversubscription in a web request; use `--n-jobs N` only when
+profiling shows that additional workers help on your machine.
 
 ### Generated outputs
 
@@ -205,7 +207,9 @@ plots/<asset>/
 
 GRU runs use `gru`/`GRU` in the corresponding names. Reported metrics include
 MSE, MAE, RMSE, MAPE, directional accuracy, and skill versus the naive
-last-price baseline.
+last-price baseline. Future charts include an 80% interval bootstrapped from
+complete validation-horizon residuals. This interval describes historical
+model error; it is not a guarantee that future prices will remain inside it.
 
 ## Run the Django dashboard
 
@@ -251,7 +255,7 @@ data/news/                      sample news input
 models/                         generated models and metrics (ignored)
 plots/                          generated forecast plots (ignored)
 mysite/                         Django project
-  dashboard/data/new/           bundled market-price CSV files
+data/                           bundled market-price and news CSV files
 requirements.txt                pinned Python dependencies
 ```
 
@@ -260,10 +264,13 @@ requirements.txt                pinned Python dependencies
 - Forecast quality depends heavily on data coverage, timestamp consistency,
   asset-specific news scoring, and hyperparameter selection.
 - Future forecasts assume no new news after the final observed candle.
+- Future timestamps reuse the sessions observed in the input CSV. Supply
+  `--interval-minutes` when the inferred candle spacing is not appropriate.
 - Dashboard training is synchronous. For a multi-user or production deployment,
   move training into a background job queue and return job progress to the UI.
 - Several scripts in `code/` are experiments or older utilities. For new
-  training runs, prefer `improved_lstm.py` or `improved_gru.py`.
+  training runs, prefer `improved_lstm.py`, `improved_gru.py`, or
+  `improved_xgboost.py`.
 
 ## License
 

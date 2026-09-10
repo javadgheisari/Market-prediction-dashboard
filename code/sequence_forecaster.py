@@ -125,16 +125,24 @@ def set_reproducible_seed(seed: int) -> None:
 
 def parse_datetimes(values: pd.Series) -> pd.Series:
     """Parse ISO timestamps and the broker's day-first timezone format."""
+    # dateutil treats ``UTC+03:00`` as a POSIX timezone (whose sign is
+    # intentionally reversed). Broker exports mean an ordinary positive UTC
+    # offset, so normalize that spelling before handing it to pandas.
+    normalized = values.astype("string").str.replace(
+        r"\s+UTC([+-]\d{2}:?\d{2})$", r"\1", regex=True
+    )
     try:
         return pd.to_datetime(
-            values, format="mixed", dayfirst=True, errors="coerce"
+            normalized, format="mixed", dayfirst=True, errors="coerce"
         )
     except (TypeError, ValueError):
-        return pd.to_datetime(values, dayfirst=True, errors="coerce")
+        return pd.to_datetime(normalized, dayfirst=True, errors="coerce")
 
 
 def load_market_data(path: Path, date_col: str, close_col: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    # Keeping fields as strings initially preserves leading zeroes in the
+    # fractional half of malformed decimal-comma volumes such as ``15,007``.
+    df = pd.read_csv(path, dtype="string")
     missing = {date_col, close_col}.difference(df.columns)
     if missing:
         raise ValueError(
@@ -419,25 +427,64 @@ def build_features(
     features = pd.DataFrame(index=df.index)
     features["return_1"] = returns
     features["return_3"] = log_close.diff(3)
+    features["return_5"] = log_close.diff(5)
     features["return_10"] = log_close.diff(10)
+    features["return_20"] = log_close.diff(20)
+    features["return_60"] = log_close.diff(60)
+    features["mean_return_5"] = returns.rolling(5, min_periods=2).mean()
+    features["mean_return_20"] = returns.rolling(20, min_periods=2).mean()
     features["volatility_10"] = returns.rolling(10, min_periods=2).std()
     features["volatility_30"] = returns.rolling(30, min_periods=2).std()
+    features["ewm_return_10"] = returns.ewm(span=10, adjust=False).mean()
+    features["ewm_return_30"] = returns.ewm(span=30, adjust=False).mean()
+    features["trend_10"] = log_close - log_close.ewm(span=10, adjust=False).mean()
+    features["trend_30"] = log_close - log_close.ewm(span=30, adjust=False).mean()
+
+    gains = returns.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+    losses = (-returns.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+    directional_movement = gains + losses
+    features["rsi_14"] = (
+        gains / directional_movement.replace(0, np.nan) - 0.5
+    )
 
     if "Open" in df:
         open_price = df["Open"].where(df["Open"] > 0)
         features["candle_body"] = np.log(close / open_price)
+        features["opening_gap"] = np.log(open_price / close.shift(1))
     if {"High", "Low"}.issubset(df.columns):
-        price_range = (df["High"] - df["Low"]).clip(lower=0)
+        high = df["High"].where(df["High"] > 0)
+        low = df["Low"].where(df["Low"] > 0)
+        price_range = (high - low).where(high >= low)
         features["high_low_range"] = price_range / close
         features["close_position"] = (
-            (close - df["Low"]) / price_range.replace(0, np.nan) - 0.5
-        )
+            (close - low) / price_range.replace(0, np.nan) - 0.5
+        ).clip(-0.5, 0.5)
+        previous_close = close.shift(1)
+        true_range = pd.concat(
+            [
+                price_range,
+                (high - previous_close).abs(),
+                (low - previous_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        features["atr_14"] = true_range.rolling(14, min_periods=2).mean() / close
     if "Volume" in df:
         volume = df["Volume"].clip(lower=0)
-        features["log_volume"] = np.log1p(volume)
-        features["volume_change"] = np.log1p(volume).diff()
+        log_volume = np.log1p(volume)
+        features["log_volume"] = log_volume
+        features["volume_change"] = log_volume.diff()
+        rolling_volume = log_volume.rolling(30, min_periods=5)
+        features["volume_zscore_30"] = (
+            (log_volume - rolling_volume.mean())
+            / rolling_volume.std().replace(0, np.nan)
+        )
 
     dates = df[date_col]
+    typical_interval = infer_interval(dates)
+    features["elapsed_intervals"] = (
+        dates.diff().dt.total_seconds() / typical_interval.total_seconds()
+    ).clip(0, 10)
     minutes = dates.dt.hour * 60 + dates.dt.minute
     features["time_sin"] = np.sin(2 * np.pi * minutes / 1440.0)
     features["time_cos"] = np.cos(2 * np.pi * minutes / 1440.0)
@@ -518,26 +565,29 @@ def calculate_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, fl
     }
 
 
-def calibrate_return_scale(
-    actual_close: np.ndarray,
-    previous_close: np.ndarray,
-    predicted_returns: np.ndarray,
-) -> float:
-    """Select validation-only shrinkage toward the last-price baseline.
+def estimate_return_bounds(training_returns: np.ndarray) -> tuple[float, float]:
+    """Return conservative data-derived bounds for one-candle predictions."""
+    values = np.asarray(training_returns, dtype=float).ravel()
+    values = values[np.isfinite(values)]
+    if values.size < 2:
+        raise ValueError("At least two finite returns are required.")
+    lower, upper = np.quantile(values, [0.005, 0.995])
+    if lower == upper:
+        padding = max(abs(float(lower)) * 0.1, np.finfo(float).eps)
+        lower, upper = lower - padding, upper + padding
+    return float(lower), float(upper)
 
-    Short-horizon financial returns are noisy. This calibration prevents a weak
-    model from making unnecessarily large bets while retaining useful signals
-    when the validation data supports them.
-    """
-    candidates = np.linspace(0.0, 1.0, 51)
-    errors = [
-        mean_absolute_error(
-            actual_close,
-            previous_close * np.exp(predicted_returns * candidate),
-        )
-        for candidate in candidates
-    ]
-    return float(candidates[int(np.argmin(errors))])
+
+def clip_predicted_returns(
+    predicted_returns: np.ndarray,
+    return_bounds: tuple[float, float],
+) -> np.ndarray:
+    """Prevent an unconstrained model output from implying an unseen price jump."""
+    return np.clip(
+        np.asarray(predicted_returns, dtype=float),
+        return_bounds[0],
+        return_bounds[1],
+    )
 
 
 def calibrate_return_scales(
@@ -582,29 +632,61 @@ def estimate_direction_probabilities(
     We approximate forecast uncertainty by bootstrapping out-of-sample
     validation residuals and applying them across the predicted horizon.
     """
-    residuals = np.asarray(validation_actual_returns) - np.asarray(
-        validation_predicted_returns
-    )
-    residuals = residuals[np.isfinite(residuals)]
-    if residuals.size < 2:
+    actual = np.asarray(validation_actual_returns, dtype=float)
+    predicted = np.asarray(validation_predicted_returns, dtype=float)
+    if actual.shape != predicted.shape:
+        raise ValueError("Actual and predicted validation returns must match.")
+    residuals = actual - predicted
+    if residuals.ndim == 1:
+        residuals = residuals[:, None]
+    residuals = residuals[np.all(np.isfinite(residuals), axis=1)]
+    if len(residuals) < 2:
         raise ValueError(
-            "At least two validation residuals are required to estimate direction probabilities."
+            "At least two validation residuals are required to estimate "
+            "direction probabilities."
         )
 
+    horizon = len(future_returns)
+    if residuals.shape[1] == 1:
+        # Backward-compatible behavior for callers with only one-step errors.
+        residual_rows = None
+    elif residuals.shape[1] != horizon:
+        raise ValueError(
+            "Validation residual horizons must match the future forecast horizon."
+        )
+    else:
+        residual_rows = residuals
+
     rng = np.random.default_rng(seed)
-    simulated_residuals = rng.choice(
-        residuals,
-        size=(simulations, len(future_returns)),
-        replace=True,
+    if residual_rows is None:
+        simulated_residuals = rng.choice(
+            residuals[:, 0], size=(simulations, horizon), replace=True
+        )
+        method = "one-step validation-residual bootstrap"
+    else:
+        # Sample complete direct-forecast error vectors. This keeps both the
+        # horizon-specific error distribution and dependence between steps.
+        sampled_rows = rng.integers(0, len(residual_rows), size=simulations)
+        simulated_residuals = residual_rows[sampled_rows]
+        method = "horizon-vector validation-residual bootstrap"
+    simulated_paths = np.cumsum(
+        np.asarray(future_returns, dtype=float)[None, :] + simulated_residuals,
+        axis=1,
     )
-    terminal_log_returns = np.sum(future_returns + simulated_residuals, axis=1)
+    terminal_log_returns = simulated_paths[:, -1]
     bullish_percent = float(np.mean(terminal_log_returns > 0) * 100)
+    quantiles = np.quantile(simulated_paths, [0.1, 0.5, 0.9], axis=0)
     return {
         "bullish_percent": bullish_percent,
         "bearish_percent": 100.0 - bullish_percent,
-        "horizon_steps": int(len(future_returns)),
+        "horizon_steps": horizon,
         "simulations": simulations,
-        "method": "validation-residual bootstrap",
+        "method": method,
+        "cumulative_log_return_quantiles": {
+            "p10": quantiles[0].tolist(),
+            "p50": quantiles[1].tolist(),
+            "p90": quantiles[2].tolist(),
+        },
     }
 
 
@@ -614,6 +696,38 @@ def infer_interval(dates: pd.Series) -> pd.Timedelta:
     if positive.empty:
         raise ValueError("Cannot infer the candle interval from the timestamp column.")
     return positive.median()
+
+
+def make_future_dates(
+    dates: pd.Series,
+    periods: int,
+    interval: pd.Timedelta,
+) -> pd.DatetimeIndex:
+    """Continue the observed candle schedule without inventing closed sessions."""
+    if periods < 1:
+        raise ValueError("periods must be positive.")
+    if interval <= pd.Timedelta(0):
+        raise ValueError("The candle interval must be positive.")
+
+    # For intraday/daily series, observed weekday/time slots are a practical
+    # exchange-calendar fallback. It skips forex/gold closures while retaining
+    # continuous weekend candles for crypto, without hard-coding asset names.
+    minutes = dates.dt.hour * 60 + dates.dt.minute
+    observed_slots = set(zip(dates.dt.dayofweek.astype(int), minutes.astype(int)))
+    candidate = pd.Timestamp(dates.iloc[-1])
+    future: list[pd.Timestamp] = []
+    maximum_attempts = periods * max(32, int(pd.Timedelta(days=14) / interval))
+    attempts = 0
+    while len(future) < periods and attempts < maximum_attempts:
+        candidate += interval
+        attempts += 1
+        slot = (candidate.dayofweek, candidate.hour * 60 + candidate.minute)
+        if slot in observed_slots:
+            future.append(candidate)
+    if len(future) != periods:
+        # Very short or irregular datasets may not reveal a reusable schedule.
+        return pd.date_range(dates.iloc[-1] + interval, periods=periods, freq=interval)
+    return pd.DatetimeIndex(future)
 
 
 def extract_asset_symbol(coin_name: str) -> str:
@@ -634,6 +748,7 @@ def save_outputs(
     target_scaler: StandardScaler,
     return_scale: float,
     return_scales: np.ndarray,
+    return_bounds: tuple[float, float],
     config: ForecastConfig,
     feature_names: list[str],
     news_metadata: dict[str, Any] | None,
@@ -666,6 +781,7 @@ def save_outputs(
                 "target_scaler": target_scaler,
                 "return_scale": return_scale,
                 "return_scales": return_scales.tolist(),
+                "return_bounds": return_bounds,
                 "feature_names": feature_names,
                 "news_metadata": news_metadata,
                 "config": asdict(config),
@@ -708,6 +824,15 @@ def save_outputs(
         marker="o",
         markersize=3,
         label=f"{model_label} future forecast (no new news assumed)",
+    )
+    uncertainty = direction_probabilities["cumulative_log_return_quantiles"]
+    ax.fill_between(
+        future_dates,
+        close[-1] * np.exp(np.asarray(uncertainty["p10"])),
+        close[-1] * np.exp(np.asarray(uncertainty["p90"])),
+        color="darkorange",
+        alpha=0.15,
+        label="80% validation-residual interval",
     )
     ax.axvline(dates.iloc[split_index], color="gray", linestyle="--", alpha=0.7)
     ax.set_title(f"{coin_name} price forecast using {model_label}")
@@ -832,6 +957,8 @@ def train_and_forecast(
         raise ValueError("dropout must be in [0, 1).")
     if config.news_half_life_hours <= 0 or config.news_lookback_hours <= 0:
         raise ValueError("News half-life and lookback must be positive.")
+    if interval_minutes is not None and interval_minutes <= 0:
+        raise ValueError("interval_minutes must be positive when provided.")
 
     set_reproducible_seed(config.seed)
     df = load_market_data(csv_path, date_col, close_col)
@@ -898,6 +1025,7 @@ def train_and_forecast(
     target_scaler = StandardScaler()
     feature_scaler.fit(features.iloc[:validation_start])
     target_scaler.fit(log_returns[1:validation_start])
+    return_bounds = estimate_return_bounds(log_returns[1:validation_start])
     scaled_features = feature_scaler.transform(features)
     scaled_targets = target_scaler.transform(log_returns)
 
@@ -918,6 +1046,7 @@ def train_and_forecast(
         split_index - config.forecast_steps + 1,
     )
 
+    tf.keras.backend.clear_session()
     model = build_model(
         kind,
         config.window,
@@ -931,7 +1060,7 @@ def train_and_forecast(
         f"Training {kind}: {len(x_train)} train samples, "
         f"{len(x_validation)} validation samples, {x_train.shape[-1]} features"
     )
-    model.fit(
+    history = model.fit(
         x_train,
         y_train,
         validation_data=(x_validation, y_validation),
@@ -956,19 +1085,18 @@ def train_and_forecast(
     validation_scaled = model.predict(
         x_validation, batch_size=config.batch_size, verbose=0
     )
-    validation_returns_by_horizon = target_scaler.inverse_transform(
-        validation_scaled.reshape(-1, 1)
-    ).reshape(validation_scaled.shape)
+    validation_returns_by_horizon = clip_predicted_returns(
+        target_scaler.inverse_transform(
+            validation_scaled.reshape(-1, 1)
+        ).reshape(validation_scaled.shape),
+        return_bounds,
+    )
     validation_actual_returns_by_horizon = target_scaler.inverse_transform(
         y_validation.reshape(-1, 1)
     ).reshape(y_validation.shape)
     return_scales = calibrate_return_scales(
         validation_actual_returns_by_horizon,
         validation_returns_by_horizon,
-    )
-    validation_returns = validation_returns_by_horizon[:, 0]
-    validation_indexes = np.arange(
-        validation_start, validation_start + len(x_validation)
     )
     return_scale = float(return_scales[0])
     print(f"Validation-selected return scales: {return_scales.tolist()}")
@@ -980,9 +1108,10 @@ def train_and_forecast(
         dtype=np.float32,
     )
     predicted_scaled = model.predict(x_test, batch_size=config.batch_size, verbose=0)
-    raw_predicted_returns = target_scaler.inverse_transform(
-        predicted_scaled[:, :1]
-    ).ravel()
+    raw_predicted_returns = clip_predicted_returns(
+        target_scaler.inverse_transform(predicted_scaled[:, :1]).ravel(),
+        return_bounds,
+    )
     predicted_returns = raw_predicted_returns * return_scale
     previous_close = close[split_index - 1 : len(df) - 1]
     test_predictions = previous_close * np.exp(predicted_returns)
@@ -1012,6 +1141,8 @@ def train_and_forecast(
         "validation_samples": len(x_validation),
         "test_samples": len(actual_test),
         "news": news_metadata,
+        "best_epoch": int(np.argmin(history.history["val_loss"]) + 1),
+        "prediction_return_bounds": list(return_bounds),
         "validation_selected_return_scale": return_scale,
         "validation_selected_return_scales": return_scales.tolist(),
         "model_metrics": model_metrics,
@@ -1021,28 +1152,28 @@ def train_and_forecast(
     final_window = scaled_features[-config.window :][None, ...].astype(np.float32)
     future_scaled = model.predict(final_window, verbose=0)[0].reshape(-1, 1)
     future_returns = (
-        target_scaler.inverse_transform(future_scaled).ravel() * return_scales
+        clip_predicted_returns(
+            target_scaler.inverse_transform(future_scaled).ravel(), return_bounds
+        )
+        * return_scales
     )
     future_predictions = close[-1] * np.exp(np.cumsum(future_returns))
-    validation_actual_returns = log_returns[validation_indexes, 0]
     direction_probabilities = estimate_direction_probabilities(
         future_returns=future_returns,
-        validation_actual_returns=validation_actual_returns,
-        validation_predicted_returns=validation_returns * return_scale,
+        validation_actual_returns=validation_actual_returns_by_horizon,
+        validation_predicted_returns=(
+            validation_returns_by_horizon * return_scales[None, :]
+        ),
         seed=config.seed,
     )
     metrics["forecast_direction_probability"] = direction_probabilities
-    print(json.dumps(metrics, indent=2))
     interval = (
         pd.Timedelta(minutes=interval_minutes)
         if interval_minutes is not None
         else infer_interval(df[date_col])
     )
-    future_dates = pd.date_range(
-        start=df[date_col].iloc[-1] + interval,
-        periods=config.forecast_steps,
-        freq=interval,
-    )
+    future_dates = make_future_dates(dates, config.forecast_steps, interval)
+    uncertainty = direction_probabilities["cumulative_log_return_quantiles"]
 
     context_start = max(0, split_index - config.window)
     metrics["chart"] = {
@@ -1061,7 +1192,18 @@ def train_and_forecast(
             pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in future_dates
         ],
         "future_predictions": future_predictions.tolist(),
+        "future_lower": (
+            close[-1] * np.exp(np.asarray(uncertainty["p10"]))
+        ).tolist(),
+        "future_median": (
+            close[-1] * np.exp(np.asarray(uncertainty["p50"]))
+        ).tolist(),
+        "future_upper": (
+            close[-1] * np.exp(np.asarray(uncertainty["p90"]))
+        ).tolist(),
+        "forecast_interval_percent": 80,
     }
+    print(json.dumps(metrics, indent=2))
 
     save_outputs(
         kind=kind,
@@ -1071,6 +1213,7 @@ def train_and_forecast(
         target_scaler=target_scaler,
         return_scale=return_scale,
         return_scales=return_scales,
+        return_bounds=return_bounds,
         config=config,
         feature_names=list(features.columns),
         news_metadata=news_metadata,
