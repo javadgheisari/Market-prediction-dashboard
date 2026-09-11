@@ -142,7 +142,9 @@ def parse_datetimes(values: pd.Series) -> pd.Series:
 def load_market_data(path: Path, date_col: str, close_col: str) -> pd.DataFrame:
     # Keeping fields as strings initially preserves leading zeroes in the
     # fractional half of malformed decimal-comma volumes such as ``15,007``.
-    df = pd.read_csv(path, dtype="string")
+    # Sniff the delimiter because many broker exports keep the .csv extension
+    # while separating fields with tabs or semicolons.
+    df = pd.read_csv(path, dtype="string", sep=None, engine="python")
     missing = {date_col, close_col}.difference(df.columns)
     if missing:
         raise ValueError(

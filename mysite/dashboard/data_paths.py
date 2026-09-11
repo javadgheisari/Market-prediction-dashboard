@@ -10,12 +10,12 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DATE_COLUMNS = ("Date", "Asia/Tehran", "UTC", "datetime", "timestamp")
 
 SYMBOL_DIRS = {
-    "EUR": ("forex",),
-    "GBP": ("forex",),
-    "BTC": ("crypto/btc",),
-    "ETH": ("crypto/eth",),
-    "XAU": ("gold", "crypto/xau"),
-    "XAG": ("gold", "crypto/xau"),
+    "EUR": ("assets/eur", "forex"),
+    "GBP": ("assets/gbp", "forex"),
+    "BTC": ("assets/btc", "crypto/btc"),
+    "ETH": ("assets/eth", "crypto/eth"),
+    "XAU": ("assets/xau", "gold", "crypto/xau"),
+    "XAG": ("assets/xag", "gold", "crypto/xau"),
 }
 
 CATEGORY_NAMES = {
@@ -39,6 +39,9 @@ def list_available_assets() -> dict[str, list[str]]:
         if not match:
             continue
         symbol = match.group(1).upper()
+        # Compact pair names such as XAUUSD and EURUSD represent the base asset.
+        if symbol.endswith("USD") and len(symbol) > 3:
+            symbol = symbol[:-3]
         if symbol in {"XAU", "XAG"}:
             category = "Precious metals"
         else:
@@ -96,7 +99,9 @@ def get_model_dir(model_name: str, symbol: str) -> Path:
 
 def load_price_data(path: Path) -> pd.DataFrame:
     """Load and normalize a price CSV into Date/Close columns used by the dashboard."""
-    df = pd.read_csv(path)
+    # Broker exports commonly use tabs or semicolons despite retaining a .csv
+    # extension.  Let pandas sniff the delimiter instead of assuming commas.
+    df = pd.read_csv(path, sep=None, engine="python")
     date_col = next((column for column in DATE_COLUMNS if column in df.columns), None)
     if date_col is None:
         raise ValueError(

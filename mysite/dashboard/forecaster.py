@@ -19,7 +19,8 @@ MODEL_KINDS = {
 
 
 def resolve_date_column(path: Path) -> str:
-    columns = pd.read_csv(path, nrows=0).columns
+    # Uploaded broker "CSV" files may actually be tab- or semicolon-separated.
+    columns = pd.read_csv(path, nrows=0, sep=None, engine="python").columns
     for column in DATE_COLUMNS:
         if column in columns:
             return column
