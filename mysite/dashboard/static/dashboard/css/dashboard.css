@@ -94,6 +94,7 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .asset-link:hover { color: #74caff; }
 .asset-link small { color: var(--app-muted); font-size: .68rem; font-weight: 500; }
 .asset-news-btn { white-space: nowrap; padding: .48rem .65rem; }
+.crypto-asset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 .7rem; }
 
 .back-link { color: var(--app-muted); text-decoration: none; font-size: .82rem; font-weight: 600; display: inline-flex; align-items: center; gap: .45rem; }
 .back-link:hover { color: var(--app-cyan); }
@@ -118,6 +119,7 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .alert-danger { color: #fecdd3; background: rgba(159,18,57,.2); border-color: rgba(251,113,133,.25); }
 .alert-warning { color: #fed7aa; background: rgba(154,52,18,.2); border-color: rgba(251,146,60,.25); }
 
-@media (max-width: 991.98px) { .sticky-panel { position: static; } .chart-empty { min-height: 360px; } }
+@media (max-width: 991.98px) { .sticky-panel { position: static; } .chart-empty { min-height: 360px; } .crypto-asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 575.98px) { .site-header { height: 66px; } .status-pill { display: none; } .hero-title { font-size: 2.25rem; } .asset-row { grid-template-columns: 1fr; } .asset-news-btn { width: 100%; } .site-footer .container { justify-content: center !important; text-align: center; } }
+@media (max-width: 575.98px) { .crypto-asset-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }

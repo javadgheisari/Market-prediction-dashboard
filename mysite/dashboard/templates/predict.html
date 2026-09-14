@@ -12,6 +12,12 @@
                     <h1 class="h3 mb-2">Build your forecast</h1>
                     <p class="text-white-50 mb-4">Configure the model, data source, and prediction horizon.</p>
 
+                    {% if not bundled_available %}
+                    <div class="alert alert-warning small" role="status">
+                        {{ symbol_name }} is supported with an uploaded price CSV. You can also complete an existing CSV from the market dashboard first.
+                    </div>
+                    {% endif %}
+
                     {% if error %}
                     <div class="alert alert-danger" role="alert">{{ error }}</div>
                     {% endif %}
@@ -228,19 +234,25 @@
         const common = {
             type: 'scatter',
             mode: 'lines',
-            hovertemplate: '%{x}<br>%{y:,.5f}<extra>%{fullData.name}</extra>'
+            hovertemplate: '<b>%{fullData.name}</b><br>%{y:,.5f}<extra></extra>',
+            hoverlabel: {
+                bgcolor: '#0b1728',
+                bordercolor: '#52708f',
+                font: {color: '#f8fafc', family: 'DM Sans, sans-serif', size: 14},
+                namelength: -1
+            }
         };
         const traces = [
-            {...common, name: 'Actual price', x: data.actual_dates, y: data.actual_prices, line: {color: '#22c55e', width: 2}},
-            {...common, name: 'Test forecast', x: data.test_dates, y: data.test_predictions, line: {color: '#60a5fa', width: 2}}
+            {...common, name: 'Actual price', x: data.actual_dates, y: data.actual_prices, line: {color: '#4ade80', width: 2.5}, hoverlabel: {...common.hoverlabel, bordercolor: '#4ade80'}},
+            {...common, name: 'Test forecast', x: data.test_dates, y: data.test_predictions, line: {color: '#60a5fa', width: 2.5}, hoverlabel: {...common.hoverlabel, bordercolor: '#60a5fa'}}
         ];
         if (data.future_lower && data.future_upper) {
             traces.push(
                 {...common, name: '80% interval lower', x: data.future_dates, y: data.future_lower, line: {color: 'rgba(251,146,60,0)'}, hoverinfo: 'skip', showlegend: false},
-                {...common, name: '80% validation-residual interval', x: data.future_dates, y: data.future_upper, line: {color: 'rgba(251,146,60,0)'}, fill: 'tonexty', fillcolor: 'rgba(251,146,60,0.16)'}
+                {...common, name: '80% validation-residual interval', x: data.future_dates, y: data.future_upper, line: {color: 'rgba(251,146,60,0)'}, fill: 'tonexty', fillcolor: 'rgba(251,146,60,0.16)', hoverinfo: 'skip'}
             );
         }
-        traces.push({...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}});
+        traces.push({...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}, marker: {size: 6, color: '#fb923c', line: {color: '#fff7ed', width: 1}}, hoverlabel: {...common.hoverlabel, bordercolor: '#fb923c'}});
         Plotly.newPlot(chart, traces, {
             title: {text: data.title, font: {color: '#f5f8fc', size: 18}},
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -250,6 +262,13 @@
             yaxis: {title: 'Price', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
             legend: {orientation: 'h', y: 1.08},
             hovermode: 'x unified',
+            hoverlabel: {
+                bgcolor: '#0b1728',
+                bordercolor: '#52708f',
+                font: {color: '#f8fafc', family: 'DM Sans, sans-serif', size: 14},
+                align: 'left',
+                namelength: -1
+            },
             margin: {l: 70, r: 25, t: 80, b: 70}
         }, {responsive: true, displaylogo: false});
     })();

@@ -18,6 +18,33 @@ SYMBOL_DIRS = {
     "XAG": ("assets/xag", "gold", "crypto/xau"),
 }
 
+# Assets shown in the dashboard even when the user needs to upload the price
+# history. BTC and ETH retain their bundled datasets; the rest share the same
+# forecasting and news-crawling workflow once a CSV is supplied.
+SUPPORTED_CRYPTO_ASSETS = (
+    "AAVE",
+    "ADA",
+    "ATOM",
+    "AVAX",
+    "BCH",
+    "BNB",
+    "BTC",
+    "DOGE",
+    "DOT",
+    "ETC",
+    "ETH",
+    "FIL",
+    "ICP",
+    "LINK",
+    "LTC",
+    "NEAR",
+    "SOL",
+    "TRX",
+    "UNI",
+    "XLM",
+    "XRP",
+)
+
 CATEGORY_NAMES = {
     "forex": "Forex",
     "crypto": "Cryptocurrency",
@@ -26,7 +53,7 @@ CATEGORY_NAMES = {
 
 
 def list_available_assets() -> dict[str, list[str]]:
-    """Return only assets which have a market CSV under the project data dir."""
+    """Return bundled markets plus supported upload-based crypto assets."""
     grouped: dict[str, set[str]] = {}
     if not DATA_DIR.exists():
         return {}
@@ -48,6 +75,7 @@ def list_available_assets() -> dict[str, list[str]]:
             category = CATEGORY_NAMES.get(relative.parts[0], "Other")
         grouped.setdefault(category, set()).add(symbol)
 
+    grouped.setdefault("Cryptocurrency", set()).update(SUPPORTED_CRYPTO_ASSETS)
     return {
         category: sorted(symbols)
         for category, symbols in sorted(grouped.items())
@@ -91,6 +119,15 @@ def resolve_data_csv(symbol: str) -> Path:
         return (category_boost, data_size, path.stat().st_mtime)
 
     return max(candidates, key=rank)
+
+
+def has_bundled_data(symbol: str) -> bool:
+    """Return whether a project price CSV is available for a symbol."""
+    try:
+        resolve_data_csv(symbol)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def get_model_dir(model_name: str, symbol: str) -> Path:

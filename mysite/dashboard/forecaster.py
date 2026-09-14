@@ -1,4 +1,6 @@
 import sys
+import tempfile
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,15 @@ MODEL_KINDS = {
 
 UTC = "UTC"
 CHART_TIMEZONE = "Asia/Tehran"
+NEWS_DATE_COLUMNS = (
+    "published_at",
+    "published",
+    "datetime",
+    "timestamp",
+    "date",
+    "Date",
+    "time",
+)
 
 
 def _chart_dates_in_tehran(values: list[str]) -> list[str]:
@@ -54,6 +65,45 @@ def resolve_news_csv(symbol: str) -> Path | None:
         DATA_DIR / "news" / f"{symbol}-USD_news.csv",
     )
     return next((path for path in candidates if path.is_file()), None)
+
+
+@contextmanager
+def news_overlapping_price_csv(price_csv: Path, news_csv: Path):
+    """Yield prices beginning at the first valid crawled-news timestamp.
+
+    Both inputs are interpreted as UTC, matching the dashboard upload contract.
+    Cropping before the chronological split ensures the training partition can
+    actually learn from news instead of placing all available articles in the
+    validation or test partitions.
+    """
+    date_col = resolve_date_column(price_csv)
+    prices = pd.read_csv(price_csv)
+    news = pd.read_csv(news_csv)
+    news_date_col = next(
+        (column for column in NEWS_DATE_COLUMNS if column in news.columns), None
+    )
+    if news_date_col is None:
+        raise ValueError(
+            f"No publication date column found in {news_csv.name}."
+        )
+
+    price_dates = pd.to_datetime(prices[date_col], errors="coerce", utc=True)
+    news_dates = pd.to_datetime(news[news_date_col], errors="coerce", utc=True)
+    first_news = news_dates.min()
+    if pd.isna(first_news):
+        raise ValueError("The crawled news file contains no valid publication dates.")
+
+    overlapping = prices.loc[price_dates >= first_news].copy()
+    if overlapping.empty:
+        raise ValueError(
+            "The crawled news begins after the final price candle. Complete the "
+            "price CSV with newer candles or crawl news matching its date range."
+        )
+
+    with tempfile.TemporaryDirectory(prefix="market-news-overlap-") as directory:
+        cropped_path = Path(directory) / price_csv.name
+        overlapping.to_csv(cropped_path, index=False)
+        yield cropped_path
 
 
 def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
@@ -108,31 +158,37 @@ def run_dashboard_forecast(
             f"{symbol} news' first, then train again with news."
         )
     with utc_price_csv(price_csv) as normalized_price_csv:
-        if model_name == "xgboost":
-            from xgboost_forecaster import train_and_forecast_xgboost
+        price_context = (
+            news_overlapping_price_csv(normalized_price_csv, news_csv)
+            if news_csv is not None
+            else nullcontext(normalized_price_csv)
+        )
+        with price_context as training_price_csv:
+            if model_name == "xgboost":
+                from xgboost_forecaster import train_and_forecast_xgboost
 
-            metrics = train_and_forecast_xgboost(
-                csv_path=normalized_price_csv,
-                date_col=resolve_date_column(normalized_price_csv),
-                close_col="Close",
-                forecast_steps=predict_steps,
-                news_csv_path=news_csv,
-            )
-        else:
-            from sequence_forecaster import ForecastConfig, train_and_forecast
+                metrics = train_and_forecast_xgboost(
+                    csv_path=training_price_csv,
+                    date_col=resolve_date_column(training_price_csv),
+                    close_col="Close",
+                    forecast_steps=predict_steps,
+                    news_csv_path=news_csv,
+                )
+            else:
+                from sequence_forecaster import ForecastConfig, train_and_forecast
 
-            config = replace(
-                ForecastConfig(epochs=50, patience=10),
-                forecast_steps=predict_steps,
-            )
-            metrics = train_and_forecast(
-                kind=MODEL_KINDS[model_name],
-                csv_path=normalized_price_csv,
-                date_col=resolve_date_column(normalized_price_csv),
-                close_col="Close",
-                config=config,
-                news_csv_path=news_csv,
-                show_plot=False,
-                save_plots=False,
-            )
+                config = replace(
+                    ForecastConfig(epochs=50, patience=10),
+                    forecast_steps=predict_steps,
+                )
+                metrics = train_and_forecast(
+                    kind=MODEL_KINDS[model_name],
+                    csv_path=training_price_csv,
+                    date_col=resolve_date_column(training_price_csv),
+                    close_col="Close",
+                    config=config,
+                    news_csv_path=news_csv,
+                    show_plot=False,
+                    save_plots=False,
+                )
     return build_plotly_chart(metrics)

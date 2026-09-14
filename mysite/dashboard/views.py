@@ -12,7 +12,7 @@ from django.utils.text import get_valid_filename
 from django.views import View
 
 from dashboard import forecaster, market_data_service, news_service
-from dashboard.data_paths import list_available_assets
+from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import CompleteCsvForm, NameForm
 
 
@@ -93,13 +93,17 @@ class PredictView(View):
         return {
             "symbol_name": symbol,
             "form": form,
+            "bundled_available": has_bundled_data(symbol),
             "asset_news": news_service.load_asset_news(symbol),
         }
 
     def get(self, request, symbol_name):
         try:
             symbol = self.get_symbol(symbol_name)
-            form = self.form_class(initial={"predict_steps": 24})
+            form = self.form_class(
+                initial={"predict_steps": 24},
+                bundled_available=has_bundled_data(symbol),
+            )
             error = None
         except ValueError as exc:
             symbol = symbol_name
@@ -113,8 +117,12 @@ class PredictView(View):
         )
 
     def post(self, request, symbol_name):
-        form = self.form_class(request.POST, request.FILES)
         symbol = symbol_name.strip().upper()
+        form = self.form_class(
+            request.POST,
+            request.FILES,
+            bundled_available=has_bundled_data(symbol),
+        )
         context = self.base_context(symbol, form)
 
         if form.is_valid():

@@ -9,9 +9,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from dashboard import market_data_service
-from dashboard.data_paths import list_available_assets, resolve_data_csv
+from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
-from dashboard.forecaster import build_plotly_chart
+from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
 from dashboard.news_service import load_asset_news
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
@@ -24,6 +24,11 @@ class DataPathTests(SimpleTestCase):
             for symbol in symbols
         }
         self.assertTrue({"BTC", "ETH", "EUR", "XAU"}.issubset(assets))
+
+    def test_supported_crypto_assets_are_listed_without_bundled_csvs(self):
+        crypto = list_available_assets()["Cryptocurrency"]
+        self.assertTrue({"SOL", "XRP", "DOGE", "ADA", "LINK"}.issubset(crypto))
+        self.assertFalse(has_bundled_data("SOL"))
 
     def test_symbol_resolves_to_existing_csv(self):
         self.assertTrue(resolve_data_csv("BTC").is_file())
@@ -97,6 +102,21 @@ class ForecastFormTests(SimpleTestCase):
                 }
             ).is_valid()
         )
+
+    def test_asset_without_bundled_data_requires_upload_source(self):
+        form = NameForm(bundled_available=False)
+        self.assertEqual(form.fields["price_source"].choices[0][0], "upload")
+
+        submitted = NameForm(
+            {
+                "model_name": "xgboost",
+                "data_source": "price_only",
+                "price_source": "bundled",
+                "predict_steps": 24,
+            },
+            bundled_available=False,
+        )
+        self.assertFalse(submitted.is_valid())
         self.assertTrue(
             NameForm(
                 {
@@ -109,12 +129,65 @@ class ForecastFormTests(SimpleTestCase):
         )
 
 
+class NewsPriceOverlapTests(SimpleTestCase):
+    def test_prices_are_trimmed_to_first_crawled_article(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            prices = directory / "BTC.csv"
+            prices.write_text(
+                "Date,Close\n"
+                "2026-08-19 06:00:00,100\n"
+                "2026-08-19 07:00:00,101\n"
+                "2026-08-19 08:00:00,102\n",
+                encoding="utf-8",
+            )
+            news = directory / "BTC_news.csv"
+            news.write_text(
+                "published_at,asset_impact\n"
+                "2026-08-19T07:00:00+00:00,0.5\n",
+                encoding="utf-8",
+            )
+
+            with news_overlapping_price_csv(prices, news) as cropped:
+                result = pd.read_csv(cropped)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result.iloc[0]["Date"], "2026-08-19 07:00:00")
+
+    def test_news_after_last_candle_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            prices = directory / "BTC.csv"
+            prices.write_text(
+                "Date,Close\n2026-08-19 06:00:00,100\n", encoding="utf-8"
+            )
+            news = directory / "BTC_news.csv"
+            news.write_text(
+                "published_at,asset_impact\n"
+                "2026-08-20T07:00:00+00:00,0.5\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "begins after the final"):
+                with news_overlapping_price_csv(prices, news):
+                    pass
+
+
 class DashboardViewTests(SimpleTestCase):
     def test_dashboard_lists_available_asset(self):
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "BTC")
         self.assertContains(response, "Complete &amp; download")
+        self.assertContains(response, "SOL")
+
+    def test_crypto_without_bundled_history_opens_in_upload_mode(self):
+        response = self.client.get(
+            reverse("predict", kwargs={"symbol_name": "SOL"})
+        )
+        self.assertContains(response, "SOL is supported with an uploaded price CSV")
+        self.assertContains(response, "Choose CSV from this computer")
+        self.assertNotContains(response, "Use project /data CSV")
 
     @patch("dashboard.views.market_data_service.merge_latest_prices")
     def test_complete_csv_returns_download(self, merge_latest_prices):

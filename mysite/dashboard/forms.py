@@ -30,7 +30,10 @@ class NameForm(forms.Form):
         label="Training data",
         initial="price_only",
         widget=forms.Select(attrs={"class": "form-select"}),
-        help_text="Crawl news first before selecting Price + crawled news.",
+        help_text=(
+            "Crawl news first. Price + crawled news automatically uses prices "
+            "from the first saved article onward."
+        ),
     )
     price_source = forms.ChoiceField(
         choices=PRICE_SOURCE_CHOICES,
@@ -55,6 +58,18 @@ class NameForm(forms.Form):
         widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
 
+    def __init__(self, *args, bundled_available=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not bundled_available:
+            self.fields["price_source"].choices = (
+                ("upload", "Choose CSV from this computer"),
+            )
+            self.fields["price_source"].initial = "upload"
+            self.fields["price_source"].help_text = (
+                "No bundled history is available for this asset yet; upload its "
+                "price CSV to forecast it."
+            )
+
     def clean(self):
         cleaned_data = super().clean()
         uploaded_file = cleaned_data.get("market_csv")
@@ -76,7 +91,7 @@ class CompleteCsvForm(forms.Form):
         widget=forms.TextInput(
             attrs={"class": "form-control", "placeholder": "BTCUSD"}
         ),
-        help_text="For example: BTCUSD, ETHUSD, EURUSD, or XAUUSD.",
+        help_text="For example: BTCUSD, EURUSD, or XAUUSD.",
     )
     market_csv = forms.FileField(
         label="Price CSV",
