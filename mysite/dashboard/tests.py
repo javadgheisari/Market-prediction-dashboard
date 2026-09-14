@@ -1,4 +1,7 @@
 import csv
+import gzip
+import json
+import struct
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
@@ -8,7 +11,7 @@ from django.test import SimpleTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from dashboard import market_data_service
+from dashboard import forexsb_service, market_data_service
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
 from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
@@ -125,9 +128,20 @@ class ForecastFormTests(SimpleTestCase):
             ).is_valid()
         )
 
-    def test_asset_without_bundled_data_requires_upload_source(self):
+    def test_asset_without_bundled_data_defaults_to_automatic_history(self):
         form = NameForm(bundled_available=False)
-        self.assertEqual(form.fields["price_source"].choices[0][0], "upload")
+        self.assertEqual(form.fields["price_source"].choices[0][0], "forexsb")
+
+        automatic = NameForm(
+            {
+                "model_name": "xgboost",
+                "data_source": "price_only",
+                "price_source": "forexsb",
+                "predict_steps": 24,
+            },
+            bundled_available=False,
+        )
+        self.assertTrue(automatic.is_valid())
 
         submitted = NameForm(
             {
@@ -195,6 +209,43 @@ class NewsPriceOverlapTests(SimpleTestCase):
                     pass
 
 
+class ForexSbHistoryTests(SimpleTestCase):
+    def test_m30_binary_feed_is_aggregated_to_h1(self):
+        metadata = gzip.compress(
+            json.dumps(
+                {"BTCUSDT": {"priceScale": 100, "volumeScale": 1}}
+            ).encode()
+        )
+        records = gzip.compress(
+            b"".join(
+                (
+                    struct.pack("<6i", 0, 10000, 10200, 9900, 10100, 4),
+                    struct.pack("<6i", 30, 10100, 10300, 10000, 10200, 6),
+                    struct.pack("<6i", 60, 10200, 10400, 10100, 10300, 5),
+                )
+            )
+        )
+
+        class Response:
+            def __init__(self, content):
+                self.content = content
+
+            def raise_for_status(self):
+                return None
+
+        session = type("Session", (), {})()
+        session.get = lambda url, **kwargs: Response(
+            metadata if url == forexsb_service.INFO_URL else records
+        )
+        result = forexsb_service.download_h1_history("BTC", session=session)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result.iloc[0]["Open"], 100.0)
+        self.assertEqual(result.iloc[0]["High"], 103.0)
+        self.assertEqual(result.iloc[0]["Low"], 99.0)
+        self.assertEqual(result.iloc[0]["Close"], 102.0)
+        self.assertEqual(result.iloc[0]["Volume"], 10.0)
+
 class DashboardViewTests(SimpleTestCase):
     def test_dashboard_lists_available_asset(self):
         response = self.client.get(reverse("dashboard"))
@@ -208,8 +259,9 @@ class DashboardViewTests(SimpleTestCase):
             reverse("predict", kwargs={"symbol_name": "SOL"})
         )
         self.assertContains(
-            response, "SOL is supported with an uploaded historical price CSV"
+            response, "SOL history can be downloaded automatically from ForexSB"
         )
+        self.assertContains(response, "Download H1 history automatically")
         self.assertContains(response, "Choose CSV from this computer")
         self.assertNotContains(response, "Use project /data CSV")
 
@@ -279,6 +331,7 @@ class DashboardViewTests(SimpleTestCase):
             model_name="gru",
             predict_steps=24,
             price_csv=None,
+            price_source="bundled",
             use_news=False,
         )
 
@@ -300,6 +353,7 @@ class DashboardViewTests(SimpleTestCase):
             model_name="gru",
             predict_steps=24,
             price_csv=None,
+            price_source="bundled",
             use_news=True,
         )
 

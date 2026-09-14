@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from dashboard.data_paths import DATA_DIR, DATE_COLUMNS, resolve_data_csv
+from dashboard.forexsb_service import forexsb_h1_csv
 from dashboard.market_data_service import refreshed_price_csv
 
 CODE_DIR = Path(__file__).resolve().parents[2] / "code"
@@ -145,50 +146,70 @@ def run_dashboard_forecast(
     predict_steps: int,
     price_csv: Path | None,
     use_news: bool,
+    price_source: str = "bundled",
 ) -> dict[str, Any]:
     """Train the selected improved model and return JSON-safe chart data."""
     if model_name not in MODEL_KINDS:
         raise ValueError(f"Unsupported model '{model_name}'.")
 
-    price_csv = price_csv or resolve_data_csv(symbol)
+    if price_source == "forexsb":
+        source_context = forexsb_h1_csv(symbol)
+    else:
+        source_context = nullcontext(price_csv or resolve_data_csv(symbol))
     news_csv = resolve_news_csv(symbol) if use_news else None
     if use_news and news_csv is None:
         raise FileNotFoundError(
             f"No crawled news file exists for {symbol}. Click 'Crawl latest "
             f"{symbol} news' first, then train again with news."
         )
-    with refreshed_price_csv(price_csv, symbol) as normalized_price_csv:
-        price_context = (
-            news_overlapping_price_csv(normalized_price_csv, news_csv)
-            if news_csv is not None
-            else nullcontext(normalized_price_csv)
-        )
-        with price_context as training_price_csv:
-            if model_name == "xgboost":
-                from xgboost_forecaster import train_and_forecast_xgboost
-
-                metrics = train_and_forecast_xgboost(
-                    csv_path=training_price_csv,
-                    date_col=resolve_date_column(training_price_csv),
-                    close_col="Close",
-                    forecast_steps=predict_steps,
-                    news_csv_path=news_csv,
-                )
-            else:
-                from sequence_forecaster import ForecastConfig, train_and_forecast
-
-                config = replace(
-                    ForecastConfig(epochs=50, patience=10),
-                    forecast_steps=predict_steps,
-                )
-                metrics = train_and_forecast(
-                    kind=MODEL_KINDS[model_name],
-                    csv_path=training_price_csv,
-                    date_col=resolve_date_column(training_price_csv),
-                    close_col="Close",
-                    config=config,
-                    news_csv_path=news_csv,
-                    show_plot=False,
-                    save_plots=False,
+    with source_context as source_price_csv:
+        with refreshed_price_csv(source_price_csv, symbol) as normalized_price_csv:
+            price_context = (
+                news_overlapping_price_csv(normalized_price_csv, news_csv)
+                if news_csv is not None
+                else nullcontext(normalized_price_csv)
+            )
+            with price_context as training_price_csv:
+                metrics = _train_model(
+                    model_name=model_name,
+                    training_price_csv=training_price_csv,
+                    predict_steps=predict_steps,
+                    news_csv=news_csv,
                 )
     return build_plotly_chart(metrics)
+
+
+def _train_model(
+    model_name: str,
+    training_price_csv: Path,
+    predict_steps: int,
+    news_csv: Path | None,
+) -> dict[str, Any]:
+    """Run a model against an already downloaded and refreshed price file."""
+    if model_name == "xgboost":
+        from xgboost_forecaster import train_and_forecast_xgboost
+
+        return train_and_forecast_xgboost(
+            csv_path=training_price_csv,
+            date_col=resolve_date_column(training_price_csv),
+            close_col="Close",
+            forecast_steps=predict_steps,
+            news_csv_path=news_csv,
+        )
+    else:
+        from sequence_forecaster import ForecastConfig, train_and_forecast
+
+        config = replace(
+            ForecastConfig(epochs=50, patience=10),
+            forecast_steps=predict_steps,
+        )
+        return train_and_forecast(
+            kind=MODEL_KINDS[model_name],
+            csv_path=training_price_csv,
+            date_col=resolve_date_column(training_price_csv),
+            close_col="Close",
+            config=config,
+            news_csv_path=news_csv,
+            show_plot=False,
+            save_plots=False,
+        )

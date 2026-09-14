@@ -15,7 +15,11 @@
 
                     {% if not bundled_available %}
                     <div class="alert alert-warning small" role="status">
-                        {{ symbol_name }} is supported with an uploaded historical price CSV. Its latest candles will be added automatically before training.
+                        {% if forexsb_available %}
+                        {{ symbol_name }} history can be downloaded automatically from ForexSB. BiQuote will add its latest closed candles before training.
+                        {% else %}
+                        {{ symbol_name }} currently requires an uploaded historical price CSV. Its latest candles will be added automatically before training.
+                        {% endif %}
                     </div>
                     {% endif %}
 

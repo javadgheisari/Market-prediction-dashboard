@@ -8,7 +8,7 @@ from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views import View
 
-from dashboard import forecaster, news_service
+from dashboard import forecaster, forexsb_service, news_service
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm
 
@@ -55,6 +55,7 @@ class PredictView(View):
             "symbol_name": symbol,
             "form": form,
             "bundled_available": has_bundled_data(symbol),
+            "forexsb_available": forexsb_service.supports_symbol(symbol),
             "asset_news": news_service.load_asset_news(symbol),
         }
 
@@ -64,6 +65,7 @@ class PredictView(View):
             form = self.form_class(
                 initial={"predict_steps": 24},
                 bundled_available=has_bundled_data(symbol),
+                forexsb_available=forexsb_service.supports_symbol(symbol),
             )
             error = None
         except ValueError as exc:
@@ -83,6 +85,7 @@ class PredictView(View):
             request.POST,
             request.FILES,
             bundled_available=has_bundled_data(symbol),
+            forexsb_available=forexsb_service.supports_symbol(symbol),
         )
         context = self.base_context(symbol, form)
 
@@ -103,6 +106,7 @@ class PredictView(View):
                         model_name=model_name,
                         predict_steps=predict_steps,
                         price_csv=price_csv,
+                        price_source=form.cleaned_data["price_source"],
                         use_news=data_source == "with_news",
                     )
                 context.update(

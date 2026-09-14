@@ -13,6 +13,7 @@ DATA_SOURCE_CHOICES = (
 
 PRICE_SOURCE_CHOICES = (
     ("bundled", "Use project /data CSV"),
+    ("forexsb", "Download H1 history automatically"),
     ("upload", "Choose CSV from this computer"),
 )
 
@@ -58,16 +59,21 @@ class NameForm(forms.Form):
         widget=forms.NumberInput(attrs={"class": "form-control"}),
     )
 
-    def __init__(self, *args, bundled_available=True, **kwargs):
+    def __init__(
+        self, *args, bundled_available=True, forexsb_available=True, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         if not bundled_available:
-            self.fields["price_source"].choices = (
-                ("upload", "Choose CSV from this computer"),
-            )
-            self.fields["price_source"].initial = "upload"
+            choices = []
+            if forexsb_available:
+                choices.append(("forexsb", "Download H1 history automatically"))
+            choices.append(("upload", "Choose CSV from this computer"))
+            self.fields["price_source"].choices = tuple(choices)
+            self.fields["price_source"].initial = choices[0][0]
+        if forexsb_available:
             self.fields["price_source"].help_text = (
-                "No bundled history is available for this asset yet; upload its "
-                "price CSV to forecast it."
+                "Automatic history uses ForexSB one-hour data; BiQuote then adds "
+                "the latest closed candles."
             )
 
     def clean(self):
