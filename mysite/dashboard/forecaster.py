@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from dashboard.data_paths import DATA_DIR, DATE_COLUMNS, resolve_data_csv
-from dashboard.market_data_service import utc_price_csv
+from dashboard.market_data_service import refreshed_price_csv
 
 CODE_DIR = Path(__file__).resolve().parents[2] / "code"
 if str(CODE_DIR) not in sys.path:
@@ -157,7 +157,7 @@ def run_dashboard_forecast(
             f"No crawled news file exists for {symbol}. Click 'Crawl latest "
             f"{symbol} news' first, then train again with news."
         )
-    with utc_price_csv(price_csv) as normalized_price_csv:
+    with refreshed_price_csv(price_csv, symbol) as normalized_price_csv:
         price_context = (
             news_overlapping_price_csv(normalized_price_csv, news_csv)
             if news_csv is not None

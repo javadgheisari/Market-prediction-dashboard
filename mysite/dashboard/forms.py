@@ -81,33 +81,3 @@ class NameForm(forms.Form):
             elif uploaded_file.size > MAX_UPLOAD_SIZE:
                 self.add_error("market_csv", "The CSV file must be 50 MB or smaller.")
         return cleaned_data
-
-
-class CompleteCsvForm(forms.Form):
-    symbol = forms.RegexField(
-        regex=r"^[A-Za-z0-9.-]+$",
-        max_length=20,
-        label="BiQuote symbol",
-        widget=forms.TextInput(
-            attrs={"class": "form-control", "placeholder": "BTCUSD"}
-        ),
-        help_text="For example: BTCUSD, EURUSD, or XAUUSD.",
-    )
-    market_csv = forms.FileField(
-        label="Price CSV",
-        widget=forms.ClearableFileInput(
-            attrs={"class": "form-control", "accept": ".csv,text/csv"}
-        ),
-        help_text="The last timestamp determines which candles are missing.",
-    )
-
-    def clean_symbol(self):
-        return self.cleaned_data["symbol"].strip().upper().replace("-", "")
-
-    def clean_market_csv(self):
-        uploaded_file = self.cleaned_data["market_csv"]
-        if not uploaded_file.name.lower().endswith(".csv"):
-            raise forms.ValidationError("The price file must be a CSV.")
-        if uploaded_file.size > MAX_UPLOAD_SIZE:
-            raise forms.ValidationError("The CSV file must be 50 MB or smaller.")
-        return uploaded_file

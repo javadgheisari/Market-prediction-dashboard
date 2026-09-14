@@ -181,6 +181,16 @@ def merge_latest_prices(path: Path, symbol: str, session=requests) -> pd.DataFra
 
 
 @contextmanager
+def refreshed_price_csv(path: Path, symbol: str):
+    """Yield a temporary UTC CSV completed with the latest closed candles."""
+    frame = merge_latest_prices(path, symbol)
+    with tempfile.TemporaryDirectory(prefix="market-refreshed-") as directory:
+        refreshed = Path(directory) / path.name
+        frame.to_csv(refreshed, index=False)
+        yield refreshed
+
+
+@contextmanager
 def utc_price_csv(path: Path):
     """Yield a temporary copy whose price timestamps are normalized to UTC."""
     frame = pd.read_csv(path, dtype="string", sep=None, engine="python")

@@ -11,10 +11,11 @@
                     <span class="symbol-chip mb-3">{{ symbol_name }}</span>
                     <h1 class="h3 mb-2">Build your forecast</h1>
                     <p class="text-white-50 mb-4">Configure the model, data source, and prediction horizon.</p>
+                    <p class="small text-white-50">Before training, closed candles newer than your CSV are fetched automatically from BiQuote.</p>
 
                     {% if not bundled_available %}
                     <div class="alert alert-warning small" role="status">
-                        {{ symbol_name }} is supported with an uploaded price CSV. You can also complete an existing CSV from the market dashboard first.
+                        {{ symbol_name }} is supported with an uploaded historical price CSV. Its latest candles will be added automatically before training.
                     </div>
                     {% endif %}
 

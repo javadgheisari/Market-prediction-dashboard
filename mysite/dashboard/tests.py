@@ -79,6 +79,28 @@ class MarketDataServiceTests(SimpleTestCase):
 
         self.assertEqual(result.iloc[0]["Date"], "2026-09-12 06:00:00")
 
+    @patch("dashboard.market_data_service.merge_latest_prices")
+    def test_refreshed_training_csv_is_temporary(self, merge_latest_prices):
+        merge_latest_prices.return_value = pd.DataFrame(
+            {
+                "Date": ["2026-09-12 06:00:00", "2026-09-12 07:00:00"],
+                "Close": [100, 101],
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "BTC.csv"
+            original.write_text(
+                "Date,Close\n2026-09-12 06:00:00,100\n", encoding="utf-8"
+            )
+            with market_data_service.refreshed_price_csv(original, "BTC") as path:
+                result = pd.read_csv(path)
+                self.assertTrue(path.exists())
+            self.assertFalse(path.exists())
+            self.assertEqual(original.read_text(encoding="utf-8").count("\n"), 2)
+
+        self.assertEqual(len(result), 2)
+        merge_latest_prices.assert_called_once_with(original, "BTC")
+
 
 class ForecastFormTests(SimpleTestCase):
     def test_forecast_steps_are_bounded(self):
@@ -178,45 +200,18 @@ class DashboardViewTests(SimpleTestCase):
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "BTC")
-        self.assertContains(response, "Complete &amp; download")
+        self.assertNotContains(response, "Complete a price CSV")
         self.assertContains(response, "SOL")
 
     def test_crypto_without_bundled_history_opens_in_upload_mode(self):
         response = self.client.get(
             reverse("predict", kwargs={"symbol_name": "SOL"})
         )
-        self.assertContains(response, "SOL is supported with an uploaded price CSV")
+        self.assertContains(
+            response, "SOL is supported with an uploaded historical price CSV"
+        )
         self.assertContains(response, "Choose CSV from this computer")
         self.assertNotContains(response, "Use project /data CSV")
-
-    @patch("dashboard.views.market_data_service.merge_latest_prices")
-    def test_complete_csv_returns_download(self, merge_latest_prices):
-        merge_latest_prices.return_value = pd.DataFrame(
-            {
-                "Date": ["2026-09-12 07:30:00"],
-                "Close": [77217.51],
-            }
-        )
-        upload = SimpleUploadedFile(
-            "BTC prices.csv",
-            b"Date,Close\n2026-09-12 06:30:00,77200\n",
-            content_type="text/csv",
-        )
-
-        response = self.client.post(
-            reverse("complete_csv"),
-            {"symbol": "btcusd", "market_csv": upload},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
-        self.assertEqual(
-            response["Content-Disposition"],
-            'attachment; filename="BTC_prices_completed.csv"',
-        )
-        self.assertIn("2026-09-12 07:30:00,77217.51", response.content.decode())
-        merge_latest_prices.assert_called_once()
-        self.assertEqual(merge_latest_prices.call_args.args[1], "BTCUSD")
 
     def test_asset_page_displays_saved_news_section(self):
         response = self.client.get(
