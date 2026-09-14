@@ -1,15 +1,16 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<main class="container py-4 text-light">
-    <a class="btn btn-sm btn-outline-light mb-4" href="{% url 'dashboard' %}">&larr; Choose another asset</a>
+<main class="container py-4 py-lg-5">
+    <a class="back-link mb-4" href="{% url 'dashboard' %}">&larr; All markets</a>
 
     <div class="row g-4">
         <section class="col-lg-4">
-            <div class="card bg-secondary bg-opacity-25 border-secondary text-light">
-                <div class="card-body">
-                    <h1 class="h3">{{ symbol_name }}</h1>
-                    <p class="text-white-50">Select a model and forecast horizon.</p>
+            <div class="app-card sticky-panel">
+                <div class="card-body p-4">
+                    <span class="symbol-chip mb-3">{{ symbol_name }}</span>
+                    <h1 class="h3 mb-2">Build your forecast</h1>
+                    <p class="text-white-50 mb-4">Configure the model, data source, and prediction horizon.</p>
 
                     {% if error %}
                     <div class="alert alert-danger" role="alert">{{ error }}</div>
@@ -25,22 +26,23 @@
                             {% for field_error in field.errors %}<div class="text-danger small">{{ field_error }}</div>{% endfor %}
                         </div>
                         {% endfor %}
-                        <button class="btn btn-primary w-100" id="forecast-submit" type="submit">Train and forecast</button>
+                        <button class="btn btn-primary w-100" id="forecast-submit" type="submit">Train &amp; generate forecast</button>
                     </form>
                     <form class="news-crawl-form mt-2" method="post" action="{% url 'crawl_news' symbol_name=symbol_name %}">
                         {% csrf_token %}
                         <button class="btn btn-outline-info w-100" type="submit">Crawl latest {{ symbol_name }} news</button>
                     </form>
-                    <p class="small text-white-50 mt-3 mb-0">Training runs during this request and can take several minutes on a CPU.</p>
+                    <p class="small text-white-50 mt-3 mb-0 text-center">Training runs live and may take several minutes on a CPU.</p>
                 </div>
             </div>
         </section>
 
         <section class="col-lg-8">
             {% if chart_data %}
-            <div class="d-flex flex-wrap gap-2 mb-3">
-                <span class="badge bg-secondary">{{ model_name }}</span>
-                <span class="badge bg-secondary">{{ predict_steps }} steps</span>
+            <div class="result-toolbar d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                <div><div class="card-kicker">Forecast result</div><h2 class="h5 mb-0 mt-1">{{ symbol_name }} outlook</h2></div>
+                <div class="d-flex flex-wrap gap-2">
+                <span class="badge bg-secondary">{{ model_name }}</span><span class="badge bg-secondary">{{ predict_steps }} steps</span>
                 {% if price_source == 'upload' %}
                 <span class="badge bg-warning text-dark">Uploaded price CSV</span>
                 {% else %}
@@ -51,31 +53,32 @@
                 {% else %}
                 <span class="badge bg-secondary">Price only</span>
                 {% endif %}
+                </div>
             </div>
-            <div class="row g-2 mb-3 text-center">
-                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>MAE</small><br>{{ chart_data.metrics.mae|floatformat:4 }}</div></div>
-                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>RMSE</small><br>{{ chart_data.metrics.rmse|floatformat:4 }}</div></div>
-                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Direction accuracy</small><br>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</div></div>
-                <div class="col-6 col-md-3"><div class="p-2 border border-secondary rounded"><small>Bullish / bearish</small><br>{{ chart_data.metrics.bullish_percent|floatformat:1 }}% / {{ chart_data.metrics.bearish_percent|floatformat:1 }}%</div></div>
-                <div class="col-12"><div class="p-2 border border-secondary rounded"><small>MAE skill versus unchanged-price baseline</small><br>{{ chart_data.metrics.mae_skill_vs_naive_percent|floatformat:1 }}%</div></div>
+            <div class="row g-2 mb-3">
+                <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">MAE</span><span class="metric-value">{{ chart_data.metrics.mae|floatformat:4 }}</span></div></div>
+                <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">RMSE</span><span class="metric-value">{{ chart_data.metrics.rmse|floatformat:4 }}</span></div></div>
+                <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">Direction accuracy</span><span class="metric-value">{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</span></div></div>
+                <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">Bullish / bearish</span><span class="metric-value">{{ chart_data.metrics.bullish_percent|floatformat:1 }}% <span class="text-white-50">/</span> {{ chart_data.metrics.bearish_percent|floatformat:1 }}%</span></div></div>
+                <div class="col-12 col-xl"><div class="metric-card"><span class="metric-label">MAE skill vs baseline</span><span class="metric-value">{{ chart_data.metrics.mae_skill_vs_naive_percent|floatformat:1 }}%</span></div></div>
             </div>
             {% if chart_data.metrics.forecast_is_naive %}
             <div class="alert alert-warning" role="alert">
                 Validation found no forecast horizon that beat the unchanged-price baseline. The displayed future line is the conservative baseline, not a model-generated price target.
             </div>
             {% endif %}
-            <div id="price-chart" style="width: 100%; height: 620px;"></div>
+            <div class="app-card chart-card"><div id="price-chart" style="width: 100%; height: 590px;"></div></div>
             {{ chart_data|json_script:"chart-data" }}
             {% else %}
-            <div class="h-100 d-flex align-items-center justify-content-center border border-secondary rounded p-5 text-white-50">
-                The actual, test-prediction, and future-prediction chart will appear here.
+            <div class="chart-empty d-flex align-items-center justify-content-center p-5 text-center text-white-50">
+                <div><span class="empty-chart-icon"><svg viewBox="0 0 24 24"><path d="M3 18l5-5 4 3 8-10M3 21h18"/></svg></span><h2 class="h5 text-light">Your forecast will appear here</h2><p class="mb-0">Choose your settings and train a model to see actual prices, test predictions, and the future outlook.</p></div>
             </div>
             {% endif %}
         </section>
     </div>
 
     {% if asset_news.rows %}
-    <section id="news-impact-section" class="card bg-secondary bg-opacity-25 border-secondary text-light mt-4" hidden>
+    <section id="news-impact-section" class="app-card mt-4" hidden>
         <div class="card-header">
             <h2 class="h5 mb-1">News impact</h2>
             <small class="text-white-50">Impact scores for the latest saved {{ symbol_name }} articles</small>
@@ -87,7 +90,7 @@
     {{ asset_news.rows|json_script:"news-impact-data" }}
     {% endif %}
 
-    <section class="card bg-secondary bg-opacity-25 border-secondary text-light mt-4">
+    <section class="app-card mt-4">
         <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
             <div>
                 <h2 class="h5 mb-0">Saved {{ symbol_name }} news</h2>
@@ -174,11 +177,11 @@
             },
             hovertemplate: '%{x}<br>%{text}<br>Impact: %{y:.2f}<extra></extra>'
         }], {
-            paper_bgcolor: '#212529',
-            plot_bgcolor: '#212529',
-            font: {color: '#f8f9fa'},
-            xaxis: {title: 'Published', gridcolor: '#495057'},
-            yaxis: {title: 'Impact score', gridcolor: '#495057', zerolinecolor: '#f8f9fa'},
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: {color: '#cbd5e1', family: 'DM Sans, sans-serif'},
+            xaxis: {title: 'Published', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
+            yaxis: {title: 'Impact score', gridcolor: 'rgba(148,163,184,.12)', zerolinecolor: '#64748b'},
             margin: {l: 70, r: 25, t: 20, b: 70}
         }, {responsive: true, displaylogo: false});
         newsImpactChartRendered = true;
@@ -239,12 +242,12 @@
         }
         traces.push({...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}});
         Plotly.newPlot(chart, traces, {
-            title: {text: data.title, font: {color: '#f8f9fa'}},
-            paper_bgcolor: '#212529',
-            plot_bgcolor: '#212529',
-            font: {color: '#f8f9fa'},
-            xaxis: {title: 'Date', gridcolor: '#495057'},
-            yaxis: {title: 'Price', gridcolor: '#495057'},
+            title: {text: data.title, font: {color: '#f5f8fc', size: 18}},
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: {color: '#cbd5e1', family: 'DM Sans, sans-serif'},
+            xaxis: {title: 'Date (Tehran time)', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
+            yaxis: {title: 'Price', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
             legend: {orientation: 'h', y: 1.08},
             hovermode: 'x unified',
             margin: {l: 70, r: 25, t: 80, b: 70}

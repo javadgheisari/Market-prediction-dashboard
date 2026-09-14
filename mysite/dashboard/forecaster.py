@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 
 from dashboard.data_paths import DATA_DIR, DATE_COLUMNS, resolve_data_csv
+from dashboard.market_data_service import utc_price_csv
 
 CODE_DIR = Path(__file__).resolve().parents[2] / "code"
 if str(CODE_DIR) not in sys.path:
@@ -16,6 +17,23 @@ MODEL_KINDS = {
     "gru": "GRU",
     "xgboost": "XGBOOST",
 }
+
+UTC = "UTC"
+CHART_TIMEZONE = "Asia/Tehran"
+
+
+def _chart_dates_in_tehran(values: list[str]) -> list[str]:
+    converted = []
+    for value in values:
+        timestamp = pd.Timestamp(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize(UTC)
+        else:
+            timestamp = timestamp.tz_convert(UTC)
+        converted.append(
+            timestamp.tz_convert(CHART_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+        )
+    return converted
 
 
 def resolve_date_column(path: Path) -> str:
@@ -39,7 +57,11 @@ def resolve_news_csv(symbol: str) -> Path | None:
 
 
 def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
-    chart = metrics["chart"]
+    chart = metrics["chart"].copy()
+    for date_key in ("actual_dates", "test_dates", "future_dates"):
+        if date_key in chart:
+            chart[date_key] = _chart_dates_in_tehran(chart[date_key])
+    chart["timezone"] = CHART_TIMEZONE
     return_scales = metrics.get(
         "validation_selected_return_scales",
         [metrics.get("validation_selected_return_scale", 1.0)],
@@ -85,31 +107,32 @@ def run_dashboard_forecast(
             f"No crawled news file exists for {symbol}. Click 'Crawl latest "
             f"{symbol} news' first, then train again with news."
         )
-    if model_name == "xgboost":
-        from xgboost_forecaster import train_and_forecast_xgboost
+    with utc_price_csv(price_csv) as normalized_price_csv:
+        if model_name == "xgboost":
+            from xgboost_forecaster import train_and_forecast_xgboost
 
-        metrics = train_and_forecast_xgboost(
-            csv_path=price_csv,
-            date_col=resolve_date_column(price_csv),
-            close_col="Close",
-            forecast_steps=predict_steps,
-            news_csv_path=news_csv,
-        )
-    else:
-        from sequence_forecaster import ForecastConfig, train_and_forecast
+            metrics = train_and_forecast_xgboost(
+                csv_path=normalized_price_csv,
+                date_col=resolve_date_column(normalized_price_csv),
+                close_col="Close",
+                forecast_steps=predict_steps,
+                news_csv_path=news_csv,
+            )
+        else:
+            from sequence_forecaster import ForecastConfig, train_and_forecast
 
-        config = replace(
-            ForecastConfig(epochs=50, patience=10),
-            forecast_steps=predict_steps,
-        )
-        metrics = train_and_forecast(
-            kind=MODEL_KINDS[model_name],
-            csv_path=price_csv,
-            date_col=resolve_date_column(price_csv),
-            close_col="Close",
-            config=config,
-            news_csv_path=news_csv,
-            show_plot=False,
-            save_plots=False,
-        )
+            config = replace(
+                ForecastConfig(epochs=50, patience=10),
+                forecast_steps=predict_steps,
+            )
+            metrics = train_and_forecast(
+                kind=MODEL_KINDS[model_name],
+                csv_path=normalized_price_csv,
+                date_col=resolve_date_column(normalized_price_csv),
+                close_col="Close",
+                config=config,
+                news_csv_path=news_csv,
+                show_plot=False,
+                save_plots=False,
+            )
     return build_plotly_chart(metrics)

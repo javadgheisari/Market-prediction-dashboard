@@ -1,16 +1,19 @@
 import re
 import tempfile
 from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 
 from django.contrib import messages
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.utils.text import get_valid_filename
 from django.views import View
 
-from dashboard import forecaster, news_service
+from dashboard import forecaster, market_data_service, news_service
 from dashboard.data_paths import list_available_assets
-from dashboard.forms import NameForm
+from dashboard.forms import CompleteCsvForm, NameForm
 
 
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.-]+$")
@@ -36,8 +39,44 @@ class DashboardView(View):
         return render(
             request,
             self.template_name,
-            {"asset_groups": list_available_assets()},
+            {
+                "asset_groups": list_available_assets(),
+                "complete_csv_form": CompleteCsvForm(),
+            },
         )
+
+
+class CompleteCsvView(View):
+    """Complete an uploaded price CSV and return it as a download."""
+
+    def post(self, request):
+        form = CompleteCsvForm(request.POST, request.FILES)
+        if not form.is_valid():
+            errors = "; ".join(
+                message
+                for messages_list in form.errors.values()
+                for message in messages_list
+            )
+            messages.error(request, errors or "Choose a valid CSV and symbol.")
+            return redirect("dashboard")
+
+        symbol = form.cleaned_data["symbol"]
+        uploaded_file = form.cleaned_data["market_csv"]
+        try:
+            with temporary_price_csv(uploaded_file, symbol) as path:
+                frame = market_data_service.merge_latest_prices(path, symbol)
+        except (OSError, RuntimeError, ValueError) as exc:
+            messages.error(request, f"Could not complete the CSV: {exc}")
+            return redirect("dashboard")
+
+        output = StringIO()
+        frame.to_csv(output, index=False, lineterminator="\n")
+        filename = get_valid_filename(f"{Path(uploaded_file.name).stem}_completed.csv")
+        response = HttpResponse(
+            output.getvalue(), content_type="text/csv; charset=utf-8"
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
 
 class PredictView(View):

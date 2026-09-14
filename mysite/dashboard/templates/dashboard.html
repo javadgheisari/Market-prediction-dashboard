@@ -1,26 +1,58 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<main class="container py-5 text-light">
-    <div class="text-center mb-5">
-        <h1 class="display-5">Market prediction dashboard</h1>
-        <p class="text-white-50">Choose an asset, then train an improved GRU or LSTM model.</p>
+<main class="container py-5">
+    <div class="text-center pt-lg-4 mb-5">
+        <div class="page-eyebrow">AI-powered market research</div>
+        <h1 class="hero-title">See the market <span class="gradient-text">before it moves.</span></h1>
+        <p class="hero-copy text-white-50">Explore price forecasts across currencies, crypto, metals, and stocks using GRU, LSTM, or XGBoost models.</p>
     </div>
 
+    <section class="app-card accent-card mb-5 mx-auto" style="max-width: 820px;">
+        <div class="card-body p-4">
+            <div class="d-flex gap-3 align-items-start mb-4">
+                <span class="section-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg></span>
+                <div><div class="card-kicker mb-1">Data utility</div><h2 class="h4 mb-1">Complete a price CSV</h2><p class="text-white-50 mb-0">Bring your history up to date with the latest closed BiQuote candles. Timestamps are treated as UTC.</p></div>
+            </div>
+            <form id="complete-csv-form" method="post" enctype="multipart/form-data" action="{% url 'complete_csv' %}">
+                {% csrf_token %}
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label" for="{{ complete_csv_form.symbol.id_for_label }}">{{ complete_csv_form.symbol.label }}</label>
+                        {{ complete_csv_form.symbol }}
+                        <div class="form-text text-white-50">{{ complete_csv_form.symbol.help_text }}</div>
+                    </div>
+                    <div class="col-md-5">
+                        <label class="form-label" for="{{ complete_csv_form.market_csv.id_for_label }}">{{ complete_csv_form.market_csv.label }}</label>
+                        {{ complete_csv_form.market_csv }}
+                        <div class="form-text text-white-50">{{ complete_csv_form.market_csv.help_text }}</div>
+                    </div>
+                    <div class="col-md-3 d-grid">
+                        <button class="btn btn-info" type="submit">Complete &amp; download</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </section>
+
     {% if asset_groups %}
+    <div class="d-flex align-items-end justify-content-between mb-3">
+        <div><div class="card-kicker mb-1">Markets</div><h2 class="h4 mb-0">Choose an asset</h2></div>
+        <span class="small text-white-50 d-none d-sm-inline">Select a symbol to configure a forecast</span>
+    </div>
     <div class="row g-4 justify-content-center">
         {% for category, symbols in asset_groups.items %}
         <section class="col-sm-6 col-lg-4">
-            <div class="card h-100 bg-secondary bg-opacity-25 border-secondary">
-                <div class="card-body">
-                    <h2 class="h5 card-title">{{ category }}</h2>
-                    <div class="d-grid gap-2 mt-3">
+            <div class="app-card asset-card">
+                <div class="asset-card-header"><h3 class="h5 mb-0">{{ category }}</h3><span class="asset-count">{{ symbols|length }} assets</span></div>
+                <div class="card-body pt-1">
+                    <div>
                         {% for symbol in symbols %}
-                        <div class="btn-group" role="group" aria-label="Actions for {{ symbol }}">
-                            <a class="btn btn-outline-light" href="{% url 'predict' symbol_name=symbol %}">{{ symbol }} forecast</a>
-                            <form class="news-crawl-form d-flex" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
+                        <div class="asset-row" role="group" aria-label="Actions for {{ symbol }}">
+                            <a class="asset-link" href="{% url 'predict' symbol_name=symbol %}"><span>{{ symbol }}</span><small>Forecast &rarr;</small></a>
+                            <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
                                 {% csrf_token %}
-                                <button class="btn btn-outline-info rounded-start-0" type="submit">Crawl news</button>
+                                <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
                             </form>
                         </div>
                         {% endfor %}
@@ -36,14 +68,16 @@
     </div>
     {% endif %}
 
-    <p class="small text-white-50 text-center mt-5">
-        Experimental forecasts only — not financial advice.
-    </p>
 </main>
 {% endblock %}
 
 {% block scripts %}
 <script>
+    document.getElementById('complete-csv-form').addEventListener('submit', function () {
+        const button = this.querySelector('button[type="submit"]');
+        button.disabled = true;
+        button.textContent = 'Completing…';
+    });
     document.querySelectorAll('.news-crawl-form').forEach(function (form) {
         form.addEventListener('submit', function () {
             const button = form.querySelector('button[type="submit"]');

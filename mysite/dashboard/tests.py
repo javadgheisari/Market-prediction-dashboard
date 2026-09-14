@@ -3,10 +3,12 @@ import tempfile
 from unittest.mock import patch
 from pathlib import Path
 
+import pandas as pd
 from django.test import SimpleTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
+from dashboard import market_data_service
 from dashboard.data_paths import list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
 from dashboard.forecaster import build_plotly_chart
@@ -28,6 +30,49 @@ class DataPathTests(SimpleTestCase):
 
     def test_xau_uses_the_most_complete_bundled_history(self):
         self.assertEqual(resolve_data_csv("XAU").name, "XAUUSD_M15.csv")
+
+
+class MarketDataServiceTests(SimpleTestCase):
+    @patch("dashboard.market_data_service.fetch_closed_bars")
+    def test_csv_and_api_candles_are_merged_in_utc(self, fetch_closed_bars):
+        fetch_closed_bars.return_value = [
+            {
+                "openTime": "2026-09-12T07:00:00Z",
+                "open": 11,
+                "high": 13,
+                "low": 10,
+                "close": 12,
+                "tickVolume": 250,
+                "isOpen": False,
+            }
+        ]
+        source = (
+            "Date,Open,High,Low,Close,Volume\n"
+            "2026-09-12 06:00:00,10,12,9,11,100\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "BTCUSD.csv"
+            path.write_text(source, encoding="utf-8")
+            result = market_data_service.merge_latest_prices(path, "BTCUSD")
+
+        self.assertEqual(
+            result["Date"].tolist(),
+            ["2026-09-12 06:00:00", "2026-09-12 07:00:00"],
+        )
+        self.assertEqual(
+            fetch_closed_bars.call_args.args[2].isoformat(),
+            "2026-09-12T06:00:00+00:00",
+        )
+
+    def test_forecast_csv_offsets_are_normalized_to_utc(self):
+        source = "Date,Close\n2026-09-12T09:30:00+03:30,100\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prices.csv"
+            path.write_text(source, encoding="utf-8")
+            with market_data_service.utc_price_csv(path) as normalized:
+                result = pd.read_csv(normalized, dtype="string")
+
+        self.assertEqual(result.iloc[0]["Date"], "2026-09-12 06:00:00")
 
 
 class ForecastFormTests(SimpleTestCase):
@@ -69,6 +114,36 @@ class DashboardViewTests(SimpleTestCase):
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "BTC")
+        self.assertContains(response, "Complete &amp; download")
+
+    @patch("dashboard.views.market_data_service.merge_latest_prices")
+    def test_complete_csv_returns_download(self, merge_latest_prices):
+        merge_latest_prices.return_value = pd.DataFrame(
+            {
+                "Date": ["2026-09-12 07:30:00"],
+                "Close": [77217.51],
+            }
+        )
+        upload = SimpleUploadedFile(
+            "BTC prices.csv",
+            b"Date,Close\n2026-09-12 06:30:00,77200\n",
+            content_type="text/csv",
+        )
+
+        response = self.client.post(
+            reverse("complete_csv"),
+            {"symbol": "btcusd", "market_csv": upload},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertEqual(
+            response["Content-Disposition"],
+            'attachment; filename="BTC_prices_completed.csv"',
+        )
+        self.assertIn("2026-09-12 07:30:00,77217.51", response.content.decode())
+        merge_latest_prices.assert_called_once()
+        self.assertEqual(merge_latest_prices.call_args.args[1], "BTCUSD")
 
     def test_asset_page_displays_saved_news_section(self):
         response = self.client.get(
@@ -235,6 +310,31 @@ class ChartAdapterTests(SimpleTestCase):
         self.assertEqual(result["metrics"]["bullish_percent"], 70.0)
         self.assertFalse(result["metrics"]["news_enabled"])
         self.assertTrue(result["metrics"]["forecast_is_naive"])
+
+    def test_chart_dates_are_displayed_in_tehran_time(self):
+        result = build_plotly_chart(
+            {
+                "chart": {
+                    "actual_dates": ["2026-09-12 06:00"],
+                    "test_dates": ["2026-09-12 06:00"],
+                    "future_dates": ["2026-09-12 07:00"],
+                },
+                "model_metrics": {
+                    "mae": 1.0,
+                    "rmse": 1.0,
+                    "directional_accuracy_percent": 50.0,
+                },
+                "forecast_direction_probability": {
+                    "bullish_percent": 50.0,
+                    "bearish_percent": 50.0,
+                },
+                "news": None,
+            }
+        )
+
+        self.assertEqual(result["actual_dates"], ["2026-09-12 09:30"])
+        self.assertEqual(result["future_dates"], ["2026-09-12 10:30"])
+        self.assertEqual(result["timezone"], "Asia/Tehran")
 
     def test_each_forecast_horizon_gets_its_own_calibration(self):
         actual = [[1.0, 1.0], [-1.0, -1.0], [1.0, 1.0], [-1.0, -1.0]]

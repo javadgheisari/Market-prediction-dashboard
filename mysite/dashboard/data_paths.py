@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
 
-DATE_COLUMNS = ("Date", "Asia/Tehran", "UTC", "datetime", "timestamp")
+DATE_COLUMNS = ("Date", "Time", "Asia/Tehran", "UTC", "datetime", "timestamp")
 
 SYMBOL_DIRS = {
     "EUR": ("assets/eur", "forex"),
