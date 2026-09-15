@@ -107,6 +107,14 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .metric-label { color: var(--app-muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; margin-bottom: .4rem; }
 .metric-value { font-family: "Manrope", sans-serif; font-size: 1.12rem; font-weight: 700; }
 .chart-card { padding: .7rem; min-height: 500px; }
+.chart-actions { min-height: 35px; }
+.detailed-chart-modal { background: #0b1728; border: 1px solid var(--app-border); border-radius: 18px; overflow: hidden; }
+.detailed-chart-modal .modal-header { background: #0f1d30; border-color: var(--app-border); }
+.detailed-chart-modal .modal-body { background: #0b1728; }
+#detailed-price-chart { width: 100%; height: min(76vh, 850px); min-height: 560px; }
+.detailed-chart-summary { display: flex; flex-wrap: wrap; gap: .6rem 1.4rem; padding: .75rem 1rem; color: var(--app-muted); background: #0b1728; border-bottom: 1px solid var(--app-border); font-size: .78rem; }
+.detailed-chart-summary strong { color: var(--app-text); margin-left: .3rem; }
+.chart-export-stage { position: fixed; left: -10000px; top: 0; width: 1800px; height: 1050px; pointer-events: none; }
 .chart-empty { min-height: 590px; border: 1px dashed rgba(148,163,184,.22); background: rgba(15,29,48,.35); border-radius: 18px; }
 .empty-chart-icon { width: 64px; height: 64px; display: grid; place-items: center; margin: 0 auto 1rem; border-radius: 18px; color: #5d718a; background: rgba(148,163,184,.06); }
 .empty-chart-icon svg { width: 32px; fill: none; stroke: currentColor; stroke-width: 1.4; }

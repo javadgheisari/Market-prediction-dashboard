@@ -324,6 +324,10 @@ class DashboardViewTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "price-chart")
+        self.assertContains(response, "View detailed chart")
+        self.assertContains(response, "Download detailed PNG")
+        self.assertContains(response, "rangeslider: {visible: true")
+        self.assertContains(response, "tickformat: '%b %d<br>%H:%M'")
         html = response.content.decode()
         self.assertLess(html.index("plotly-latest.min.js"), html.index("Plotly.newPlot"))
         run_forecast.assert_called_once_with(

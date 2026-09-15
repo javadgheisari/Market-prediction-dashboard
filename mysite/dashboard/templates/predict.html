@@ -78,8 +78,31 @@
                 Validation found no forecast horizon that beat the unchanged-price baseline. The displayed future line is the conservative baseline, not a model-generated price target.
             </div>
             {% endif %}
+            <div class="chart-actions d-flex flex-wrap justify-content-end gap-2 mb-2">
+                <button class="btn btn-sm btn-outline-light" id="detailed-chart-view" type="button" data-bs-toggle="modal" data-bs-target="#detailed-chart-modal">View detailed chart</button>
+                <button class="btn btn-sm btn-outline-info" id="detailed-chart-download" type="button">Download detailed PNG</button>
+            </div>
             <div class="app-card chart-card"><div id="price-chart" style="width: 100%; height: 590px;"></div></div>
             {{ chart_data|json_script:"chart-data" }}
+
+            <div class="modal fade" id="detailed-chart-modal" tabindex="-1" aria-labelledby="detailed-chart-title" aria-hidden="true">
+                <div class="modal-dialog modal-fullscreen-xl-down modal-xl modal-dialog-centered">
+                    <div class="modal-content detailed-chart-modal">
+                        <div class="modal-header">
+                            <div><div class="card-kicker">Expanded analysis</div><h2 class="modal-title h5 mt-1" id="detailed-chart-title">{{ symbol_name }} detailed forecast</h2></div>
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="detailed-chart-summary">
+                            <span>Model <strong>{{ model_name }}</strong></span>
+                            <span>Horizon <strong>{{ predict_steps }} hours</strong></span>
+                            <span>MAE <strong>{{ chart_data.metrics.mae|floatformat:5 }}</strong></span>
+                            <span>RMSE <strong>{{ chart_data.metrics.rmse|floatformat:5 }}</strong></span>
+                            <span>Direction <strong>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</strong></span>
+                        </div>
+                        <div class="modal-body p-2 p-md-3"><div id="detailed-price-chart"></div></div>
+                    </div>
+                </div>
+            </div>
             {% else %}
             <div class="chart-empty d-flex align-items-center justify-content-center p-5 text-center text-white-50">
                 <div><span class="empty-chart-icon"><svg viewBox="0 0 24 24"><path d="M3 18l5-5 4 3 8-10M3 21h18"/></svg></span><h2 class="h5 text-light">Your forecast will appear here</h2><p class="mb-0">Choose your settings and train a model to see actual prices, test predictions, and the future outlook.</p></div>
@@ -258,13 +281,13 @@
             );
         }
         traces.push({...common, mode: 'lines+markers', name: 'Future forecast', x: data.future_dates, y: data.future_predictions, line: {color: '#fb923c', width: 3}, marker: {size: 6, color: '#fb923c', line: {color: '#fff7ed', width: 1}}, hoverlabel: {...common.hoverlabel, bordercolor: '#fb923c'}});
-        Plotly.newPlot(chart, traces, {
+        const baseLayout = {
             title: {text: data.title, font: {color: '#f5f8fc', size: 18}},
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
+            paper_bgcolor: '#0b1728',
+            plot_bgcolor: '#0f1d30',
             font: {color: '#cbd5e1', family: 'DM Sans, sans-serif'},
-            xaxis: {title: 'Date (Tehran time)', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
-            yaxis: {title: 'Price', gridcolor: 'rgba(148,163,184,.12)', zeroline: false},
+            xaxis: {title: 'Date and time (Tehran)', gridcolor: 'rgba(148,163,184,.16)', zeroline: false, tickformat: '%b %d<br>%H:%M', nticks: 12},
+            yaxis: {title: 'Price', gridcolor: 'rgba(148,163,184,.16)', zeroline: false, tickformat: ',.5f'},
             legend: {orientation: 'h', y: 1.08},
             hovermode: 'x unified',
             hoverlabel: {
@@ -275,7 +298,76 @@
                 namelength: -1
             },
             margin: {l: 70, r: 25, t: 80, b: 70}
-        }, {responsive: true, displaylogo: false});
+        };
+        const chartConfig = {
+            responsive: true,
+            displaylogo: false,
+            toImageButtonOptions: {format: 'png', filename: `${data.title.replace(/[^a-z0-9]+/gi, '_')}_chart`, width: 1600, height: 900, scale: 1}
+        };
+        Plotly.newPlot(chart, traces, baseLayout, chartConfig);
+
+        const detailedLayout = {
+            ...baseLayout,
+            title: {
+                text: `${data.title}<br><span style="font-size:12px;color:#91a0b5">Hourly timeline · Tehran time · 80% validation-residual interval</span>`,
+                font: {color: '#f5f8fc', size: 22}
+            },
+            xaxis: {
+                ...baseLayout.xaxis,
+                nticks: 18,
+                showspikes: true,
+                spikemode: 'across',
+                spikesnap: 'cursor',
+                spikecolor: '#94a3b8',
+                rangeslider: {visible: true, bgcolor: '#07111f', bordercolor: '#29415e', borderwidth: 1, thickness: .09},
+                rangeselector: {
+                    bgcolor: '#14243a', activecolor: '#2878aa', font: {color: '#f8fafc'},
+                    buttons: [
+                        {count: 24, label: '24h', step: 'hour', stepmode: 'backward'},
+                        {count: 3, label: '3d', step: 'day', stepmode: 'backward'},
+                        {count: 7, label: '7d', step: 'day', stepmode: 'backward'},
+                        {step: 'all', label: 'All'}
+                    ]
+                }
+            },
+            yaxis: {...baseLayout.yaxis, fixedrange: false},
+            legend: {...baseLayout.legend, y: 1.1, bgcolor: 'rgba(11,23,40,.82)', bordercolor: '#29415e', borderwidth: 1},
+            margin: {l: 85, r: 35, t: 115, b: 85},
+            autosize: true
+        };
+
+        const detailedModal = document.getElementById('detailed-chart-modal');
+        const detailedChart = document.getElementById('detailed-price-chart');
+        let detailedRendered = false;
+        detailedModal.addEventListener('shown.bs.modal', function () {
+            if (!detailedRendered) {
+                Plotly.newPlot(detailedChart, traces, detailedLayout, chartConfig);
+                detailedRendered = true;
+            } else {
+                Plotly.Plots.resize(detailedChart);
+            }
+        });
+
+        document.getElementById('detailed-chart-download').addEventListener('click', function () {
+            const button = this;
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = 'Preparing PNG…';
+            const exportChart = document.createElement('div');
+            exportChart.className = 'chart-export-stage';
+            document.body.appendChild(exportChart);
+            const exportLayout = {...detailedLayout, width: 1800, height: 1050, autosize: false};
+            Plotly.newPlot(exportChart, traces, exportLayout, {displayModeBar: false, displaylogo: false})
+                .then(function () {
+                    return Plotly.downloadImage(exportChart, {format: 'png', filename: `${data.title.replace(/[^a-z0-9]+/gi, '_')}_detailed`, width: 1800, height: 1050, scale: 1});
+                })
+                .finally(function () {
+                    Plotly.purge(exportChart);
+                    exportChart.remove();
+                    button.disabled = false;
+                    button.textContent = originalText;
+                });
+        });
     })();
 </script>
 {% endif %}
