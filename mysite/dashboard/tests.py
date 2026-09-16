@@ -58,6 +58,48 @@ class MarketDataServiceTests(SimpleTestCase):
         self.assertEqual(market_data_service.api_symbol("CAD"), "USDCAD")
         self.assertEqual(market_data_service.api_symbol("BRENT"), "UKOIL")
 
+    def test_latest_prices_are_mapped_and_only_fresh_open_quotes_are_live(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "USDJPY": {
+                        "mid": 142.125,
+                        "stale": False,
+                        "marketState": "open",
+                        "timestamp": "2026-09-16T19:18:49Z",
+                    },
+                    "UKOIL": {
+                        "mid": 95.25,
+                        "stale": False,
+                        "marketState": "closed",
+                        "timestamp": "2026-09-16T17:00:00Z",
+                    },
+                }
+
+        observed = {}
+        session = type("Session", (), {})()
+
+        def get(url, **kwargs):
+            observed["url"] = url
+            observed["params"] = kwargs["params"]
+            return Response()
+
+        session.get = get
+        result = market_data_service.fetch_latest_prices(
+            ["JPY", "BRENT"], session=session
+        )
+
+        self.assertEqual(observed["url"], market_data_service.LATEST_URL)
+        self.assertEqual(
+            observed["params"], [("symbols", "USDJPY"), ("symbols", "UKOIL")]
+        )
+        self.assertEqual(result["JPY"]["price"], 142.125)
+        self.assertTrue(result["JPY"]["live"])
+        self.assertFalse(result["BRENT"]["live"])
+
     def test_biquote_history_excludes_open_candle_and_sorts_rows(self):
         class Response:
             def raise_for_status(self):
@@ -392,6 +434,26 @@ class DashboardViewTests(SimpleTestCase):
             reverse("download_prices", kwargs={"symbol_name": "BTC"}),
         )
         self.assertContains(response, "Download CSV")
+        self.assertContains(response, 'class="live-price-indicator"')
+        self.assertContains(response, "refreshLatestPrices()")
+
+    @patch("dashboard.views.market_data_service.fetch_latest_prices")
+    def test_latest_prices_endpoint_returns_dashboard_quotes(self, fetch_latest):
+        fetch_latest.return_value = {
+            "EUR": {
+                "price": 1.14677,
+                "live": True,
+                "market_state": "open",
+                "timestamp": "2026-09-16T19:18:49Z",
+            }
+        }
+        response = self.client.get(reverse("latest_prices"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["prices"]["EUR"]["price"], 1.14677)
+        requested_symbols = fetch_latest.call_args.args[0]
+        self.assertIn("EUR", requested_symbols)
+        self.assertIn("XAU", requested_symbols)
 
     @patch("dashboard.views.latest_price_csv")
     def test_latest_price_csv_is_returned_as_attachment(self, latest_price_csv):

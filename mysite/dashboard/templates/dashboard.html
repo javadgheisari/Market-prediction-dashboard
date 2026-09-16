@@ -23,6 +23,11 @@
                         {% for symbol in symbols %}
                         <div class="asset-row" role="group" aria-label="Actions for {{ symbol }}">
                             <a class="asset-link" href="{% url 'predict' symbol_name=symbol %}"><span>{{ symbol }}</span><small>Forecast &rarr;</small></a>
+                            <div class="asset-live-price" data-live-price-symbol="{{ symbol }}" aria-live="polite">
+                                <span class="live-price-indicator" aria-hidden="true"></span>
+                                <span class="live-price-value">Loading price…</span>
+                                <small class="live-price-status">Connecting</small>
+                            </div>
                             <div class="asset-actions">
                                 <a class="btn btn-sm btn-outline-light asset-download-btn" href="{% url 'download_prices' symbol_name=symbol %}">Download CSV</a>
                                 <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
@@ -49,6 +54,52 @@
 
 {% block scripts %}
 <script>
+    const latestPricesUrl = "{% url 'latest_prices' %}";
+
+    function formatAssetPrice(price) {
+        const digits = price >= 1000 ? 2 : price >= 100 ? 3 : price >= 1 ? 5 : 8;
+        return new Intl.NumberFormat(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: digits,
+        }).format(price);
+    }
+
+    async function refreshLatestPrices() {
+        const priceRows = document.querySelectorAll('[data-live-price-symbol]');
+        try {
+            const response = await fetch(latestPricesUrl, {
+                headers: {'Accept': 'application/json'},
+                cache: 'no-store',
+            });
+            if (!response.ok) throw new Error('Latest prices are unavailable');
+            const payload = await response.json();
+            priceRows.forEach(function (row) {
+                const quote = payload.prices[row.dataset.livePriceSymbol];
+                const indicator = row.querySelector('.live-price-indicator');
+                const value = row.querySelector('.live-price-value');
+                const status = row.querySelector('.live-price-status');
+                indicator.classList.toggle('is-live', Boolean(quote && quote.live));
+                if (!quote) {
+                    value.textContent = 'Price unavailable';
+                    status.textContent = 'Offline';
+                    return;
+                }
+                value.textContent = formatAssetPrice(quote.price);
+                status.textContent = quote.live ? 'Live' :
+                    (quote.market_state === 'closed' ? 'Market closed' : 'Delayed');
+            });
+        } catch (error) {
+            priceRows.forEach(function (row) {
+                row.querySelector('.live-price-indicator').classList.remove('is-live');
+                row.querySelector('.live-price-value').textContent = 'Price unavailable';
+                row.querySelector('.live-price-status').textContent = 'Offline';
+            });
+        }
+    }
+
+    refreshLatestPrices();
+    window.setInterval(refreshLatestPrices, 30000);
+
     document.querySelectorAll('.news-crawl-form').forEach(function (form) {
         form.addEventListener('submit', function () {
             const button = form.querySelector('button[type="submit"]');

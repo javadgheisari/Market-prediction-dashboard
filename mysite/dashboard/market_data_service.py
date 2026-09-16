@@ -15,6 +15,7 @@ from dashboard.data_paths import DATE_COLUMNS
 
 
 API_URL = "https://biquote.io/api/{symbol}/ohlc"
+LATEST_URL = "https://biquote.io/api/latest"
 UTC = ZoneInfo("UTC")
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_BARS = 1000
@@ -51,6 +52,40 @@ def api_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper().replace("-", "")
     fallback = normalized if normalized.endswith("USD") else f"{normalized}USD"
     return SYMBOLS.get(normalized, fallback)
+
+
+def fetch_latest_prices(symbols: list[str], session=requests) -> dict[str, dict]:
+    """Return normalized latest-price metadata keyed by dashboard symbol."""
+    normalized = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols))
+    provider_symbols = {symbol: api_symbol(symbol) for symbol in normalized}
+    response = session.get(
+        LATEST_URL,
+        params=[("symbols", symbol) for symbol in provider_symbols.values()],
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("BiQuote returned an invalid latest-price response.")
+
+    prices = {}
+    for dashboard_symbol, provider_symbol in provider_symbols.items():
+        quote = payload.get(provider_symbol)
+        if not isinstance(quote, dict):
+            continue
+        price = quote.get("mid")
+        if not isinstance(price, (int, float)) or price <= 0:
+            price = quote.get("last")
+        if not isinstance(price, (int, float)) or price <= 0:
+            continue
+        market_state = str(quote.get("marketState", "unknown")).lower()
+        prices[dashboard_symbol] = {
+            "price": float(price),
+            "live": quote.get("stale") is False and market_state == "open",
+            "market_state": market_state,
+            "timestamp": quote.get("timestamp") or quote.get("lastQuoteAt"),
+        }
+    return prices
 
 
 def _date_column(frame: pd.DataFrame, path: Path) -> str:

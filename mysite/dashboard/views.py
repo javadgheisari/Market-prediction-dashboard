@@ -4,12 +4,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from django.contrib import messages
-from django.http import Http404, HttpResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views import View
 
-from dashboard import forecaster, forexsb_service, news_service
+from dashboard import forecaster, forexsb_service, market_data_service, news_service
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm
 from dashboard.price_export_service import latest_price_csv
@@ -55,6 +55,16 @@ class DashboardView(View):
             self.template_name,
             {"asset_groups": list_available_assets()},
         )
+
+
+class LatestPricesView(View):
+    def get(self, request):
+        symbols = sorted(available_symbols())
+        try:
+            prices = market_data_service.fetch_latest_prices(symbols)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return JsonResponse({"error": str(exc), "prices": {}}, status=502)
+        return JsonResponse({"prices": prices})
 
 
 class PredictView(View):
