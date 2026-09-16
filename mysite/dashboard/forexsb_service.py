@@ -29,10 +29,23 @@ SUPPORTED_CRYPTO = {
     "FIL", "ICP", "LINK", "LTC", "SOL", "TRX", "UNI", "XLM", "XRP",
 }
 
+FEED_SYMBOLS = {
+    "AUD": "AUDUSD",
+    "BRENT": "BRENTCMDUSD",
+    "CAD": "USDCAD",
+    "CHF": "USDCHF",
+    "EUR": "EURUSD",
+    "GBP": "GBPUSD",
+    "JPY": "USDJPY",
+    "NZD": "NZDUSD",
+    "XAG": "XAGUSD",
+    "XAU": "XAUUSD",
+}
+
 
 def supports_symbol(symbol: str) -> bool:
     symbol = symbol.upper()
-    return symbol in SUPPORTED_CRYPTO or symbol in {"EUR", "GBP", "XAU", "XAG"}
+    return symbol in SUPPORTED_CRYPTO or symbol in FEED_SYMBOLS
 
 
 def _decode_gzip(payload: bytes) -> bytes:
@@ -59,7 +72,9 @@ def _feed_symbol(symbol: str) -> str:
     symbol = symbol.strip().upper()
     if symbol in SUPPORTED_CRYPTO:
         return f"{symbol}USDT"
-    return symbol if symbol.endswith("USD") else f"{symbol}USD"
+    return FEED_SYMBOLS.get(
+        symbol, symbol if symbol.endswith("USD") else f"{symbol}USD"
+    )
 
 
 def _record_size(payload: bytes) -> int:

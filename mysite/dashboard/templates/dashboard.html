@@ -15,7 +15,7 @@
     </div>
     <div class="row g-4 justify-content-center">
         {% for category, symbols in asset_groups.items %}
-        <section class="{% if category == 'Cryptocurrency' %}col-12{% else %}col-sm-6 col-lg-4{% endif %}">
+        <section class="market-group {% if category == 'Cryptocurrency' %}order-2 col-12{% else %}market-group-compact order-1 col-sm-6 col-lg-5{% endif %}" data-market-category="{{ category }}">
             <div class="app-card asset-card">
                 <div class="asset-card-header"><h3 class="h5 mb-0">{{ category }}</h3><span class="asset-count">{{ symbols|length }} assets</span></div>
                 <div class="card-body pt-1">
@@ -23,10 +23,13 @@
                         {% for symbol in symbols %}
                         <div class="asset-row" role="group" aria-label="Actions for {{ symbol }}">
                             <a class="asset-link" href="{% url 'predict' symbol_name=symbol %}"><span>{{ symbol }}</span><small>Forecast &rarr;</small></a>
-                            <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
-                                {% csrf_token %}
-                                <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
-                            </form>
+                            <div class="asset-actions">
+                                <a class="btn btn-sm btn-outline-light asset-download-btn" href="{% url 'download_prices' symbol_name=symbol %}">Download CSV</a>
+                                <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol %}">
+                                    {% csrf_token %}
+                                    <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
+                                </form>
+                            </div>
                         </div>
                         {% endfor %}
                     </div>

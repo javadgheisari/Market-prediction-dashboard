@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from django.contrib import messages
+from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.views import View
@@ -11,9 +12,25 @@ from django.views import View
 from dashboard import forecaster, forexsb_service, news_service
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm
+from dashboard.price_export_service import latest_price_csv
 
 
 SYMBOL_PATTERN = re.compile(r"^[A-Z0-9.-]+$")
+
+
+def normalize_symbol(symbol_name):
+    symbol = symbol_name.strip().upper()
+    if not SYMBOL_PATTERN.fullmatch(symbol):
+        raise ValueError("The asset symbol contains unsupported characters.")
+    return symbol
+
+
+def available_symbols():
+    return {
+        symbol
+        for symbols in list_available_assets().values()
+        for symbol in symbols
+    }
 
 
 @contextmanager
@@ -45,10 +62,7 @@ class PredictView(View):
     form_class = NameForm
 
     def get_symbol(self, symbol_name):
-        symbol = symbol_name.strip().upper()
-        if not SYMBOL_PATTERN.fullmatch(symbol):
-            raise ValueError("The asset symbol contains unsupported characters.")
-        return symbol
+        return normalize_symbol(symbol_name)
 
     def base_context(self, symbol, form):
         return {
@@ -143,3 +157,26 @@ class NewsCrawlView(View):
                 f"articles; {result['saved']} total saved.",
             )
         return redirect("predict", symbol_name=symbol)
+
+
+class PriceCsvDownloadView(View):
+    def get(self, request, symbol_name):
+        try:
+            symbol = normalize_symbol(symbol_name)
+        except ValueError as exc:
+            raise Http404(str(exc)) from exc
+        if symbol not in available_symbols():
+            raise Http404("Unknown dashboard asset.")
+
+        try:
+            with latest_price_csv(symbol) as path:
+                csv_content = path.read_bytes()
+        except (OSError, RuntimeError, ValueError) as exc:
+            messages.error(request, f"Could not download prices for {symbol}: {exc}")
+            return redirect("dashboard")
+
+        response = HttpResponse(csv_content, content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{symbol}_latest_H1.csv"'
+        )
+        return response

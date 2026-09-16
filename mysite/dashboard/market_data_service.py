@@ -20,10 +20,17 @@ REQUEST_TIMEOUT_SECONDS = 15
 MAX_BARS = 1000
 
 SYMBOLS = {
+    "AUD": "AUDUSD",
     "BTC": "BTCUSD",
+    "BRENT": "UKOIL",
+    "CAD": "USDCAD",
+    "CHF": "USDCHF",
     "ETH": "ETHUSD",
     "EUR": "EURUSD",
     "GBP": "GBPUSD",
+    "JPY": "USDJPY",
+    "NZD": "NZDUSD",
+    "USOIL": "USOIL",
     "XAU": "XAUUSD",
     "XAG": "XAGUSD",
 }
@@ -110,6 +117,52 @@ def fetch_closed_bars(
     return sorted(
         (bar for bar in bars if not bar.get("isOpen", False)),
         key=lambda bar: bar["openTime"],
+    )
+
+
+def download_h1_history(symbol: str, session=requests) -> pd.DataFrame:
+    """Download BiQuote's recent closed H1 candles as a model-ready frame."""
+    response = session.get(
+        API_URL.format(symbol=api_symbol(symbol)),
+        params={"interval": "1h", "limit": MAX_BARS},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    bars = payload.get("bars")
+    if not isinstance(bars, list):
+        raise RuntimeError("BiQuote returned an invalid OHLC response.")
+
+    rows = []
+    for bar in bars:
+        if bar.get("isOpen", False):
+            continue
+        try:
+            timestamp = pd.Timestamp(bar["openTime"])
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize(UTC)
+            else:
+                timestamp = timestamp.tz_convert(UTC)
+            rows.append(
+                {
+                    "Date": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "Open": bar["open"],
+                    "High": bar["high"],
+                    "Low": bar["low"],
+                    "Close": bar["close"],
+                    "Volume": bar.get("tickVolume", bar.get("volume", 0)),
+                }
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("BiQuote returned an invalid OHLC bar.") from exc
+    if not rows:
+        raise ValueError(f"BiQuote returned no closed H1 candles for {api_symbol(symbol)}.")
+
+    return (
+        pd.DataFrame(rows)
+        .drop_duplicates(subset="Date", keep="last")
+        .sort_values("Date")
+        .reset_index(drop=True)
     )
 
 

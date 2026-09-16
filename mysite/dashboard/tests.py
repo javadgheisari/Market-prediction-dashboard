@@ -12,6 +12,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from dashboard import forexsb_service, market_data_service
+from dashboard import price_export_service
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
 from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
@@ -33,6 +34,17 @@ class DataPathTests(SimpleTestCase):
         self.assertTrue({"SOL", "XRP", "DOGE", "ADA", "LINK"}.issubset(crypto))
         self.assertFalse(has_bundled_data("SOL"))
 
+    def test_fx_majors_and_commodities_are_listed(self):
+        assets = list_available_assets()
+        self.assertTrue(
+            {"AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD"}.issubset(
+                assets["FX majors"]
+            )
+        )
+        self.assertTrue(
+            {"BRENT", "USOIL", "XAG", "XAU"}.issubset(assets["Commodities"])
+        )
+
     def test_symbol_resolves_to_existing_csv(self):
         self.assertTrue(resolve_data_csv("BTC").is_file())
 
@@ -41,6 +53,59 @@ class DataPathTests(SimpleTestCase):
 
 
 class MarketDataServiceTests(SimpleTestCase):
+    def test_provider_symbols_use_conventional_fx_pairs_and_oil_tickers(self):
+        self.assertEqual(market_data_service.api_symbol("JPY"), "USDJPY")
+        self.assertEqual(market_data_service.api_symbol("CAD"), "USDCAD")
+        self.assertEqual(market_data_service.api_symbol("BRENT"), "UKOIL")
+
+    def test_biquote_history_excludes_open_candle_and_sorts_rows(self):
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "bars": [
+                        {
+                            "openTime": "2026-09-16T18:00:00Z",
+                            "open": 3,
+                            "high": 4,
+                            "low": 2,
+                            "close": 3.5,
+                            "tickVolume": 30,
+                            "isOpen": True,
+                        },
+                        {
+                            "openTime": "2026-09-16T17:00:00Z",
+                            "open": 2,
+                            "high": 3,
+                            "low": 1,
+                            "close": 2.5,
+                            "tickVolume": 20,
+                            "isOpen": False,
+                        },
+                        {
+                            "openTime": "2026-09-16T16:00:00Z",
+                            "open": 1,
+                            "high": 2,
+                            "low": 0.5,
+                            "close": 1.5,
+                            "tickVolume": 10,
+                            "isOpen": False,
+                        },
+                    ]
+                }
+
+        session = type("Session", (), {})()
+        session.get = lambda *args, **kwargs: Response()
+        result = market_data_service.download_h1_history("USOIL", session=session)
+
+        self.assertEqual(
+            result["Date"].tolist(),
+            ["2026-09-16 16:00:00", "2026-09-16 17:00:00"],
+        )
+        self.assertEqual(result["Close"].tolist(), [1.5, 2.5])
+
     @patch("dashboard.market_data_service.fetch_closed_bars")
     def test_csv_and_api_candles_are_merged_in_utc(self, fetch_closed_bars):
         fetch_closed_bars.return_value = [
@@ -210,6 +275,24 @@ class NewsPriceOverlapTests(SimpleTestCase):
 
 
 class ForexSbHistoryTests(SimpleTestCase):
+    def test_fx_and_commodity_symbols_map_to_available_feeds(self):
+        expected = {
+            "AUD": "AUDUSD",
+            "CAD": "USDCAD",
+            "CHF": "USDCHF",
+            "EUR": "EURUSD",
+            "GBP": "GBPUSD",
+            "JPY": "USDJPY",
+            "NZD": "NZDUSD",
+            "BRENT": "BRENTCMDUSD",
+        }
+        for symbol, feed_symbol in expected.items():
+            with self.subTest(symbol=symbol):
+                self.assertTrue(forexsb_service.supports_symbol(symbol))
+                self.assertEqual(forexsb_service._feed_symbol(symbol), feed_symbol)
+
+        self.assertFalse(forexsb_service.supports_symbol("USOIL"))
+
     def test_m30_binary_feed_is_aggregated_to_h1(self):
         metadata = gzip.compress(
             json.dumps(
@@ -246,6 +329,37 @@ class ForexSbHistoryTests(SimpleTestCase):
         self.assertEqual(result.iloc[0]["Close"], 102.0)
         self.assertEqual(result.iloc[0]["Volume"], 10.0)
 
+
+class PriceExportServiceTests(SimpleTestCase):
+    @patch("dashboard.price_export_service.market_data_service.refreshed_price_csv")
+    @patch("dashboard.price_export_service.forexsb_service.forexsb_h1_csv")
+    def test_supported_asset_combines_forexsb_and_biquote(
+        self, forexsb_h1_csv, refreshed_price_csv
+    ):
+        historical = Path("forexsb.csv")
+        refreshed = Path("combined.csv")
+        forexsb_h1_csv.return_value.__enter__.return_value = historical
+        refreshed_price_csv.return_value.__enter__.return_value = refreshed
+
+        with price_export_service.latest_price_csv("JPY") as result:
+            self.assertEqual(result, refreshed)
+
+        forexsb_h1_csv.assert_called_once_with("JPY")
+        refreshed_price_csv.assert_called_once_with(historical, "JPY")
+
+    @patch("dashboard.price_export_service.market_data_service.download_h1_history")
+    def test_asset_without_forexsb_uses_biquote_history(self, download_history):
+        download_history.return_value = pd.DataFrame(
+            {"Date": ["2026-09-16 17:00:00"], "Close": [100.0]}
+        )
+
+        with price_export_service.latest_price_csv("USOIL") as path:
+            self.assertTrue(path.exists())
+            result = pd.read_csv(path)
+
+        self.assertEqual(result["Close"].tolist(), [100.0])
+        download_history.assert_called_once_with("USOIL")
+
 class DashboardViewTests(SimpleTestCase):
     def test_dashboard_lists_available_asset(self):
         response = self.client.get(reverse("dashboard"))
@@ -253,6 +367,52 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "BTC")
         self.assertNotContains(response, "Complete a price CSV")
         self.assertContains(response, "SOL")
+        self.assertContains(
+            response,
+            reverse("download_prices", kwargs={"symbol_name": "BTC"}),
+        )
+        self.assertContains(response, "Download CSV")
+
+    @patch("dashboard.views.latest_price_csv")
+    def test_latest_price_csv_is_returned_as_attachment(self, latest_price_csv):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "BTC_H1.csv"
+            path.write_text(
+                "Date,Close\n2026-09-16 17:00:00,100\n", encoding="utf-8"
+            )
+            latest_price_csv.return_value.__enter__.return_value = path
+            response = self.client.get(
+                reverse("download_prices", kwargs={"symbol_name": "BTC"})
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertEqual(
+            response["Content-Disposition"],
+            'attachment; filename="BTC_latest_H1.csv"',
+        )
+        self.assertIn(b"2026-09-16 17:00:00,100", response.content)
+        latest_price_csv.assert_called_once_with("BTC")
+
+    def test_unknown_asset_price_download_returns_404(self):
+        response = self.client.get(
+            reverse("download_prices", kwargs={"symbol_name": "UNKNOWN"})
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_compact_market_groups_share_a_row_before_crypto(self):
+        response = self.client.get(reverse("dashboard"))
+        html = response.content.decode()
+        compact_classes = (
+            'class="market-group market-group-compact order-1 '
+            'col-sm-6 col-lg-5"'
+        )
+        self.assertEqual(html.count(compact_classes), 2)
+        self.assertContains(response, 'data-market-category="Commodities"')
+        self.assertContains(response, 'data-market-category="FX majors"')
+        self.assertContains(
+            response, 'class="market-group order-2 col-12"', count=1
+        )
 
     def test_crypto_without_bundled_history_opens_in_upload_mode(self):
         response = self.client.get(
@@ -264,6 +424,23 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "Download H1 history automatically")
         self.assertContains(response, "Choose CSV from this computer")
         self.assertNotContains(response, "Use project /data CSV")
+
+    def test_fx_major_without_bundled_history_uses_automatic_download(self):
+        response = self.client.get(
+            reverse("predict", kwargs={"symbol_name": "JPY"})
+        )
+        self.assertContains(
+            response, "JPY history can be downloaded automatically from ForexSB"
+        )
+        self.assertContains(response, "Download H1 history automatically")
+
+    def test_wti_without_bundled_history_uses_upload(self):
+        response = self.client.get(
+            reverse("predict", kwargs={"symbol_name": "USOIL"})
+        )
+        self.assertContains(response, "USOIL currently requires an uploaded")
+        self.assertContains(response, "Choose CSV from this computer")
+        self.assertNotContains(response, "Download H1 history automatically")
 
     def test_asset_page_displays_saved_news_section(self):
         response = self.client.get(

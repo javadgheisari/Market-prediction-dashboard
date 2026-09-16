@@ -45,18 +45,37 @@ SUPPORTED_CRYPTO_ASSETS = (
     "XRP",
 )
 
+# Keep the dashboard's existing short-symbol convention: each FX symbol maps
+# to its conventional USD major pair (JPY means USDJPY, while EUR means
+# EURUSD). The provider-specific pair mapping lives in the data services.
+SUPPORTED_FX_MAJOR_ASSETS = (
+    "AUD",
+    "CAD",
+    "CHF",
+    "EUR",
+    "GBP",
+    "JPY",
+    "NZD",
+)
+
+SUPPORTED_COMMODITY_ASSETS = (
+    "BRENT",
+    "USOIL",
+    "XAG",
+    "XAU",
+)
+
 CATEGORY_NAMES = {
-    "forex": "Forex",
+    "forex": "FX majors",
     "crypto": "Cryptocurrency",
-    "gold": "Precious metals",
+    "gold": "Commodities",
+    "commodities": "Commodities",
 }
 
 
 def list_available_assets() -> dict[str, list[str]]:
-    """Return bundled markets plus supported upload-based crypto assets."""
+    """Return all supported markets plus assets discovered from bundled CSVs."""
     grouped: dict[str, set[str]] = {}
-    if not DATA_DIR.exists():
-        return {}
 
     for path in DATA_DIR.rglob("*.csv"):
         relative = path.relative_to(DATA_DIR)
@@ -69,13 +88,15 @@ def list_available_assets() -> dict[str, list[str]]:
         # Compact pair names such as XAUUSD and EURUSD represent the base asset.
         if symbol.endswith("USD") and len(symbol) > 3:
             symbol = symbol[:-3]
-        if symbol in {"XAU", "XAG"}:
-            category = "Precious metals"
+        if symbol in SUPPORTED_COMMODITY_ASSETS:
+            category = "Commodities"
         else:
             category = CATEGORY_NAMES.get(relative.parts[0], "Other")
         grouped.setdefault(category, set()).add(symbol)
 
     grouped.setdefault("Cryptocurrency", set()).update(SUPPORTED_CRYPTO_ASSETS)
+    grouped.setdefault("FX majors", set()).update(SUPPORTED_FX_MAJOR_ASSETS)
+    grouped.setdefault("Commodities", set()).update(SUPPORTED_COMMODITY_ASSETS)
     return {
         category: sorted(symbols)
         for category, symbols in sorted(grouped.items())

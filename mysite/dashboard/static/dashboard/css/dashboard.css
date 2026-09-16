@@ -88,12 +88,15 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .asset-card:hover { transform: translateY(-3px); box-shadow: 0 24px 55px rgba(0,0,0,.27); border-color: rgba(54,169,255,.3); }
 .asset-card-header { display: flex; align-items: center; justify-content: space-between; padding: 1.2rem 1.25rem .9rem; }
 .asset-count { color: var(--app-muted); font-size: .7rem; border: 1px solid var(--app-border); border-radius: 99px; padding: .2rem .55rem; }
-.asset-row { display: grid; grid-template-columns: 1fr auto; gap: .55rem; padding: .55rem; margin-bottom: .55rem; background: rgba(5,14,26,.46); border: 1px solid transparent; border-radius: 12px; transition: background .2s, border-color .2s; }
+.asset-row { display: grid; grid-template-columns: 1fr; gap: .4rem; padding: .55rem; margin-bottom: .55rem; background: rgba(5,14,26,.46); border: 1px solid transparent; border-radius: 12px; transition: background .2s, border-color .2s; }
 .asset-row:hover { background: rgba(22,40,64,.8); border-color: var(--app-border); }
 .asset-link { display: flex; align-items: center; justify-content: space-between; color: var(--app-text); text-decoration: none; font-weight: 700; padding: .35rem .45rem; }
 .asset-link:hover { color: #74caff; }
 .asset-link small { color: var(--app-muted); font-size: .68rem; font-weight: 500; }
 .asset-news-btn { white-space: nowrap; padding: .48rem .65rem; }
+.asset-actions { display: flex; flex-wrap: wrap; align-items: center; column-gap: .75rem; row-gap: .55rem; }
+.asset-actions form { display: flex; }
+.asset-download-btn { white-space: nowrap; padding: .48rem .65rem; margin-right: .15rem; }
 .crypto-asset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 .7rem; }
 
 .back-link { color: var(--app-muted); text-decoration: none; font-size: .82rem; font-weight: 600; display: inline-flex; align-items: center; gap: .45rem; }

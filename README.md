@@ -1,7 +1,7 @@
 # Market Prediction Dashboard
 
 A research and demonstration project for forecasting Forex, cryptocurrency,
-precious-metal, and US stock prices with LSTM and GRU neural networks. The
+commodity, and US stock prices with LSTM, GRU, and XGBoost models. The
 repository contains:
 
 - an improved, leakage-aware command-line forecasting pipeline that combines
@@ -230,10 +230,21 @@ trains a model, so it can take several minutes on a CPU. The result page shows
 actual prices, one-step test predictions, future predictions, error metrics,
 directional accuracy, and estimated bullish/bearish probabilities.
 
+The dashboard includes the seven USD FX majors: AUD (`AUDUSD`), CAD (`USDCAD`),
+CHF (`USDCHF`), EUR (`EURUSD`), GBP (`GBPUSD`), JPY (`USDJPY`), and NZD
+(`NZDUSD`). It also includes gold (XAU), silver (XAG), Brent crude, and WTI
+crude (USOIL). FX majors, metals, and Brent can download one-hour ForexSB
+history automatically. WTI requires an uploaded historical CSV; BiQuote adds
+its latest closed candles before training.
+
 For historical prices, select **Use project /data CSV** to use the bundled file
 for that asset, or **Choose CSV from this computer** to upload a CSV of up to
 50 MB. Uploaded price files are used temporarily for one training request and
 are deleted afterward.
+
+Use **Download CSV** beside any dashboard asset to export its latest completed
+one-hour candles. Where available, the export combines deeper ForexSB history
+with newer BiQuote candles; other assets use BiQuote's recent H1 history.
 
 Use **Crawl news** beside an asset, or on its forecast page, to fetch the latest
 seven days of relevant RSS headlines into `data/news/<SYMBOL>_news.csv`. Existing
