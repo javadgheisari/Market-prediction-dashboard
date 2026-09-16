@@ -32,6 +32,7 @@ NEWS_DATE_COLUMNS = (
     "Date",
     "time",
 )
+NEWS_PRICE_CONTEXT_ROWS = 60
 
 
 def _chart_dates_in_tehran(values: list[str]) -> list[str]:
@@ -70,12 +71,11 @@ def resolve_news_csv(symbol: str) -> Path | None:
 
 @contextmanager
 def news_overlapping_price_csv(price_csv: Path, news_csv: Path):
-    """Yield prices beginning at the first valid crawled-news timestamp.
+    """Yield news-overlapping prices with pre-news model context.
 
     Both inputs are interpreted as UTC, matching the dashboard upload contract.
-    Cropping before the chronological split ensures the training partition can
-    actually learn from news instead of placing all available articles in the
-    validation or test partitions.
+    Keeping one input window before the first article gives the model enough
+    price context while cropping still ensures news reaches the training split.
     """
     date_col = resolve_date_column(price_csv)
     prices = pd.read_csv(price_csv)
@@ -94,12 +94,15 @@ def news_overlapping_price_csv(price_csv: Path, news_csv: Path):
     if pd.isna(first_news):
         raise ValueError("The crawled news file contains no valid publication dates.")
 
-    overlapping = prices.loc[price_dates >= first_news].copy()
-    if overlapping.empty:
+    overlap_positions = (price_dates >= first_news).to_numpy().nonzero()[0]
+    if not len(overlap_positions):
         raise ValueError(
             "The crawled news begins after the final price candle. Complete the "
             "price CSV with newer candles or crawl news matching its date range."
         )
+    first_overlap = int(overlap_positions[0])
+    context_start = max(0, first_overlap - NEWS_PRICE_CONTEXT_ROWS)
+    overlapping = prices.iloc[context_start:].copy()
 
     with tempfile.TemporaryDirectory(prefix="market-news-overlap-") as directory:
         cropped_path = Path(directory) / price_csv.name

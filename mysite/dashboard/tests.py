@@ -231,7 +231,7 @@ class ForecastFormTests(SimpleTestCase):
 
 
 class NewsPriceOverlapTests(SimpleTestCase):
-    def test_prices_are_trimmed_to_first_crawled_article(self):
+    def test_prices_keep_pre_news_context(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)
             prices = directory / "BTC.csv"
@@ -252,8 +252,28 @@ class NewsPriceOverlapTests(SimpleTestCase):
             with news_overlapping_price_csv(prices, news) as cropped:
                 result = pd.read_csv(cropped)
 
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result.iloc[0]["Date"], "2026-08-19 07:00:00")
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result.iloc[0]["Date"], "2026-08-19 06:00:00")
+
+    def test_news_crop_keeps_exactly_one_model_window_before_news(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            prices = directory / "BTC.csv"
+            dates = pd.date_range("2026-08-01", periods=100, freq="h", tz="UTC")
+            pd.DataFrame(
+                {"Date": dates.strftime("%Y-%m-%d %H:%M:%S"), "Close": range(100)}
+            ).to_csv(prices, index=False)
+            news = directory / "BTC_news.csv"
+            news.write_text(
+                f"published_at,asset_impact\n{dates[80].isoformat()},0.5\n",
+                encoding="utf-8",
+            )
+
+            with news_overlapping_price_csv(prices, news) as cropped:
+                result = pd.read_csv(cropped)
+
+        self.assertEqual(len(result), 80)
+        self.assertEqual(result.iloc[0]["Date"], "2026-08-01 20:00:00")
 
     def test_news_after_last_candle_has_actionable_error(self):
         with tempfile.TemporaryDirectory() as directory:
