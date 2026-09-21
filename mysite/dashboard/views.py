@@ -74,13 +74,13 @@ class PredictView(View):
     def get_symbol(self, symbol_name):
         return normalize_symbol(symbol_name)
 
-    def base_context(self, symbol, form):
+    def base_context(self, symbol, form, news_page=1):
         return {
             "symbol_name": symbol,
             "form": form,
             "bundled_available": has_bundled_data(symbol),
             "forexsb_available": forexsb_service.supports_symbol(symbol),
-            "asset_news": news_service.load_asset_news(symbol),
+            "asset_news": news_service.load_asset_news(symbol, page=news_page),
         }
 
     def get(self, request, symbol_name):
@@ -100,7 +100,12 @@ class PredictView(View):
         return render(
             request,
             self.template_name,
-            {**self.base_context(symbol, form), "error": error},
+            {
+                **self.base_context(
+                    symbol, form, news_page=request.GET.get("news_page", 1)
+                ),
+                "error": error,
+            },
         )
 
     def post(self, request, symbol_name):
@@ -111,7 +116,9 @@ class PredictView(View):
             bundled_available=has_bundled_data(symbol),
             forexsb_available=forexsb_service.supports_symbol(symbol),
         )
-        context = self.base_context(symbol, form)
+        context = self.base_context(
+            symbol, form, news_page=request.GET.get("news_page", 1)
+        )
 
         if form.is_valid():
             try:

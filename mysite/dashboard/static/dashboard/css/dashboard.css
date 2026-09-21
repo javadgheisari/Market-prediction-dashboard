@@ -133,6 +133,11 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .table > :not(caption) > * > * { border-color: rgba(148,163,184,.09); padding: .9rem 1.1rem; }
 .table thead th { color: var(--app-muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
 .link-light { text-decoration-color: rgba(255,255,255,.28); text-underline-offset: 3px; }
+.news-pagination { padding: 1rem 1.25rem; border-top: 1px solid var(--app-border); }
+.news-pagination .page-link { color: var(--app-text); background: rgba(15,29,48,.72); border-color: var(--app-border); }
+.news-pagination .page-link:hover { color: #06121e; background: var(--app-cyan); border-color: var(--app-cyan); }
+.news-pagination .page-item.active .page-link { color: #04111f; background: linear-gradient(110deg, var(--app-primary), var(--app-cyan)); border-color: transparent; }
+.news-pagination .page-item.disabled .page-link { color: #607089; background: rgba(7,17,31,.4); border-color: var(--app-border); }
 .alert { border: 1px solid transparent; border-radius: 12px; }
 .alert-danger { color: #fecdd3; background: rgba(159,18,57,.2); border-color: rgba(251,113,133,.25); }
 .alert-warning { color: #fed7aa; background: rgba(154,52,18,.2); border-color: rgba(251,146,60,.25); }

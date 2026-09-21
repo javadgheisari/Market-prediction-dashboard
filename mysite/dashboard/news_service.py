@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from django.core.paginator import Paginator
+
 from dashboard.data_paths import DATA_DIR
 
 
@@ -19,18 +21,33 @@ def crawl_asset_news(symbol: str) -> dict[str, object]:
     return crawl(symbol, days=7, max_per_asset=100, timeout=20.0)
 
 
-def load_asset_news(symbol: str, limit: int = 25) -> dict[str, object]:
-    """Load recent locally saved headlines for display in the dashboard."""
+def load_asset_news(
+    symbol: str, page: int | str = 1, per_page: int = 25
+) -> dict[str, object]:
+    """Load one page of locally saved headlines for dashboard display."""
     path = DATA_DIR / "news" / f"{symbol.upper()}_news.csv"
     if not path.is_file():
-        return {"rows": [], "total": 0, "path": path}
+        return {
+            "rows": [],
+            "total": 0,
+            "path": path,
+            "page": 1,
+            "num_pages": 1,
+            "start_index": 0,
+            "end_index": 0,
+            "has_previous": False,
+            "has_next": False,
+            "page_range": [1],
+        }
 
     with path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
 
     rows.sort(key=lambda row: row.get("published_at", ""), reverse=True)
+    paginator = Paginator(rows, per_page)
+    page_obj = paginator.get_page(page)
     display_rows = []
-    for row in rows[:limit]:
+    for row in page_obj.object_list:
         raw_url = row.get("url", "")
         parsed_url = urlparse(raw_url)
         safe_url = raw_url if parsed_url.scheme in {"http", "https"} else ""
@@ -55,4 +72,19 @@ def load_asset_news(symbol: str, limit: int = 25) -> dict[str, object]:
                 "impact": impact,
             }
         )
-    return {"rows": display_rows, "total": len(rows), "path": path}
+    return {
+        "rows": display_rows,
+        "total": len(rows),
+        "path": path,
+        "page": page_obj.number,
+        "num_pages": paginator.num_pages,
+        "start_index": page_obj.start_index(),
+        "end_index": page_obj.end_index(),
+        "has_previous": page_obj.has_previous(),
+        "has_next": page_obj.has_next(),
+        "previous_page": page_obj.previous_page_number()
+        if page_obj.has_previous()
+        else None,
+        "next_page": page_obj.next_page_number() if page_obj.has_next() else None,
+        "page_range": list(paginator.page_range),
+    }

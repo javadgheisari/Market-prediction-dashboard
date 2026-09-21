@@ -251,8 +251,9 @@ seven days of relevant RSS headlines into `data/news/<SYMBOL>_news.csv`. Existin
 rows are retained and deduplicated. A later training run automatically includes
 that news file when **Price + crawled news** is selected and its dates overlap
 the market dataset. Select **Price data only** to train while ignoring news.
-Each asset page lists its latest 25 saved headlines with publication time,
-source, link, and the crawler's asset-impact score.
+Each asset page lists saved headlines with publication time, source, link, and
+the crawler's asset-impact score. Pagination provides access to the complete
+saved history, 25 articles at a time.
 
 The Django code is configured for local development (`DEBUG=True`) and must not
 be deployed publicly without production settings, a private secret key, and

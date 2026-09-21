@@ -124,11 +124,13 @@
     {{ asset_news.rows|json_script:"news-impact-data" }}
     {% endif %}
 
-    <section class="app-card mt-4">
+    <section id="saved-news" class="app-card mt-4">
         <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
             <div>
                 <h2 class="h5 mb-0">Saved {{ symbol_name }} news</h2>
-                <small class="text-white-50">{{ asset_news.total }} article{{ asset_news.total|pluralize }} saved; showing the latest 25</small>
+                <small class="text-white-50">
+                    {{ asset_news.total }} article{{ asset_news.total|pluralize }} saved{% if asset_news.total %}; showing {{ asset_news.start_index }}–{{ asset_news.end_index }}{% endif %}
+                </small>
             </div>
             <form class="news-crawl-form" method="post" action="{% url 'crawl_news' symbol_name=symbol_name %}">
                 {% csrf_token %}
@@ -173,6 +175,31 @@
             </div>
             {% endif %}
         </div>
+        {% if asset_news.num_pages > 1 %}
+        <nav class="news-pagination" aria-label="Saved news pages">
+            <ul class="pagination pagination-sm justify-content-center flex-wrap mb-0">
+                <li class="page-item {% if not asset_news.has_previous %}disabled{% endif %}">
+                    {% if asset_news.has_previous %}
+                    <a class="page-link" href="?news_page={{ asset_news.previous_page }}#saved-news" aria-label="Previous news page">Previous</a>
+                    {% else %}
+                    <span class="page-link">Previous</span>
+                    {% endif %}
+                </li>
+                {% for page_number in asset_news.page_range %}
+                <li class="page-item {% if page_number == asset_news.page %}active{% endif %}">
+                    <a class="page-link" href="?news_page={{ page_number }}#saved-news"{% if page_number == asset_news.page %} aria-current="page"{% endif %}>{{ page_number }}</a>
+                </li>
+                {% endfor %}
+                <li class="page-item {% if not asset_news.has_next %}disabled{% endif %}">
+                    {% if asset_news.has_next %}
+                    <a class="page-link" href="?news_page={{ asset_news.next_page }}#saved-news" aria-label="Next news page">Next</a>
+                    {% else %}
+                    <span class="page-link">Next</span>
+                    {% endif %}
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
     </section>
 </main>
 
