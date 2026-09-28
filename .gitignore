@@ -1,4 +1,6 @@
 /venv
+__pycache__/
+*.py[cod]
 /data/*
 # !/data/news/
 # /data/news/*
@@ -19,3 +21,10 @@
 /open-plot-app
 /plots
 /models
+/freqai/user_data/backtest_results/
+/freqai/user_data/data/
+/freqai/user_data/hyperopt_results/
+/freqai/user_data/logs/
+/freqai/user_data/models/
+/freqai/user_data/plot/
+/freqai/user_data/*.sqlite*
