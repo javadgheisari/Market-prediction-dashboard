@@ -1,0 +1,26 @@
+services:
+  freqai:
+    image: freqtradeorg/freqtrade:stable_freqai
+    restart: unless-stopped
+    volumes:
+      - ./user_data:/freqtrade/user_data
+    command: >
+      trade
+      --config /freqtrade/user_data/config.forecast.json
+      --strategy MarketForecastStrategy
+      --freqaimodel LightGBMRegressor
+      --logfile /freqtrade/user_data/logs/freqai.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3.sqlite
+
+  freqai-torch:
+    image: freqtradeorg/freqtrade:stable_freqaitorch
+    profiles: ["torch"]
+    volumes:
+      - ./user_data:/freqtrade/user_data
+    command: >
+      trade
+      --config /freqtrade/user_data/config.forecast.json
+      --strategy MarketForecastStrategy
+      --freqaimodel PyTorchMLPRegressor
+      --logfile /freqtrade/user_data/logs/freqai-torch.log
+      --db-url sqlite:////freqtrade/user_data/tradesv3-torch.sqlite

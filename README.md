@@ -8,7 +8,9 @@ repository contains:
   market candles with timestamped asset news;
 - a Django dashboard for selecting an asset and running the improved LSTM or
   GRU pipeline or the XGBoost forecaster; and
-- sample OHLCV datasets for the symbols displayed by the dashboard.
+- sample OHLCV datasets for the symbols displayed by the dashboard; and
+- an isolated FreqAI/Freqtrade workspace for adaptive asset forecasts and
+  directional trading signals with LightGBM, XGBoost, and PyTorch models.
 
 > **Important:** The forecasts are experimental and are not financial advice.
 > Historical test results do not guarantee future performance.
@@ -259,11 +261,26 @@ The Django code is configured for local development (`DEBUG=True`) and must not
 be deployed publicly without production settings, a private secret key, and
 appropriate allowed hosts.
 
+## Run FreqAI models
+
+The [`freqai/`](freqai/) workspace adds real FreqAI regression and
+classification strategies without mixing current Freqtrade dependencies into
+the dashboard's Python 3.10/TensorFlow 2.10 environment. It includes:
+
+- LightGBM and XGBoost regressors for 24-candle forward-return forecasts;
+- LightGBM and XGBoost classifiers for `up`, `flat`, and `down` signals; and
+- an optional PyTorch MLP regressor image.
+
+It is dry-run only by default. Follow [`freqai/README.md`](freqai/README.md) to
+download exchange candles, backtest each model, inspect its signals, and start
+adaptive retraining.
+
 ## Project layout
 
 ```text
 code/                           training and utility scripts
 data/news/                      sample news input
+freqai/                         isolated FreqAI/Freqtrade runtime and strategies
 models/                         generated models and metrics (ignored)
 plots/                          generated forecast plots (ignored)
 mysite/                         Django project
