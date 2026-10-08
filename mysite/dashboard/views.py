@@ -124,6 +124,20 @@ class PredictView(View):
             try:
                 symbol = self.get_symbol(symbol_name)
                 model_name = form.cleaned_data["model_name"]
+                model_label = dict(form.fields["model_name"].choices).get(
+                    model_name, model_name.upper()
+                )
+                if model_name == "news_buy":
+                    context.update(
+                        {
+                            "symbol_name": symbol,
+                            "model_name": model_label,
+                            "news_decision": news_service.predict_news_buy_decision(
+                                symbol
+                            ),
+                        }
+                    )
+                    return render(request, self.template_name, context)
                 data_source = form.cleaned_data["data_source"]
                 predict_steps = form.cleaned_data["predict_steps"]
                 uploaded_csv = (
@@ -144,9 +158,7 @@ class PredictView(View):
                 context.update(
                     {
                         "symbol_name": symbol,
-                        "model_name": dict(form.fields["model_name"].choices).get(
-                            model_name, model_name.upper()
-                        ),
+                        "model_name": model_label,
                         "data_source": data_source,
                         "price_source": form.cleaned_data["price_source"],
                         "predict_steps": predict_steps,
@@ -176,6 +188,26 @@ class NewsCrawlView(View):
                 f"{symbol} news updated: fetched {result['fetched']} relevant "
                 f"articles; {result['saved']} total saved.",
             )
+        return redirect("predict", symbol_name=symbol)
+
+
+class NewsClearView(View):
+    def post(self, request, symbol_name):
+        try:
+            symbol = normalize_symbol(symbol_name)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("dashboard")
+
+        try:
+            removed = news_service.clear_asset_news(symbol)
+        except OSError as exc:
+            messages.error(request, f"Could not clear news for {symbol}: {exc}")
+        else:
+            if removed:
+                messages.success(request, f"Saved news for {symbol} was cleared.")
+            else:
+                messages.info(request, f"There was no saved news to clear for {symbol}.")
         return redirect("predict", symbol_name=symbol)
 
 

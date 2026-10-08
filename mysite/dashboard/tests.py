@@ -3,6 +3,7 @@ import gzip
 import json
 import struct
 import tempfile
+from datetime import datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 
@@ -16,7 +17,11 @@ from dashboard import price_export_service
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm
 from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
-from dashboard.news_service import load_asset_news
+from dashboard.news_service import (
+    clear_asset_news,
+    load_asset_news,
+    predict_news_buy_decision,
+)
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
 
@@ -213,6 +218,18 @@ class MarketDataServiceTests(SimpleTestCase):
 
 
 class ForecastFormTests(SimpleTestCase):
+    def test_news_only_model_does_not_require_uploaded_prices(self):
+        form = NameForm(
+            {
+                "model_name": "news_buy",
+                "data_source": "price_only",
+                "price_source": "upload",
+                "predict_steps": 24,
+            }
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+
     def test_forecast_steps_are_bounded(self):
         self.assertFalse(
             NameForm(
@@ -463,6 +480,11 @@ class DashboardViewTests(SimpleTestCase):
             reverse("download_prices", kwargs={"symbol_name": "BTC"}),
         )
         self.assertContains(response, "Download CSV")
+        self.assertContains(
+            response,
+            reverse("clear_news", kwargs={"symbol_name": "BTC"}),
+        )
+        self.assertContains(response, "Clear news")
         self.assertContains(response, 'class="live-price-indicator"')
         self.assertContains(response, "refreshLatestPrices()")
 
@@ -559,6 +581,7 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertContains(response, "Saved BTC news")
         self.assertContains(response, "Refresh news")
+        self.assertContains(response, "Clear news")
         self.assertContains(response, "Chronos-2")
         self.assertContains(response, "Advanced model configuration")
 
@@ -732,6 +755,58 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertEqual(response.status_code, 405)
 
+    @patch("dashboard.views.news_service.clear_asset_news")
+    def test_clear_news_removes_one_asset_and_redirects(self, clear_news):
+        clear_news.return_value = True
+        response = self.client.post(
+            reverse("clear_news", kwargs={"symbol_name": "btc"}),
+            follow=True,
+        )
+
+        self.assertRedirects(
+            response, reverse("predict", kwargs={"symbol_name": "BTC"})
+        )
+        self.assertContains(response, "Saved news for BTC was cleared.")
+        clear_news.assert_called_once_with("BTC")
+
+    def test_clear_news_is_post_only(self):
+        response = self.client.get(
+            reverse("clear_news", kwargs={"symbol_name": "BTC"})
+        )
+        self.assertEqual(response.status_code, 405)
+
+    @patch("dashboard.views.forecaster.run_dashboard_forecast")
+    @patch("dashboard.views.news_service.predict_news_buy_decision")
+    def test_news_only_model_returns_buy_decision_without_forecast(
+        self, predict_news, run_forecast
+    ):
+        predict_news.return_value = {
+            "decision": "BUY",
+            "should_buy": True,
+            "signal_score": 0.72,
+            "confidence_percent": 68.0,
+            "articles_analyzed": 3,
+            "articles_saved": 4,
+            "strongest_headline": "Asset rallies after major approval",
+            "explanation": "The news signal is bullish.",
+        }
+        response = self.client.post(
+            reverse("predict", kwargs={"symbol_name": "BTC"}),
+            {
+                "model_name": "news_buy",
+                "data_source": "price_only",
+                "price_source": "bundled",
+                "predict_steps": 24,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "BTC: BUY")
+        self.assertContains(response, "News-only decision")
+        self.assertContains(response, "68.0%")
+        predict_news.assert_called_once_with("BTC")
+        run_forecast.assert_not_called()
+
 
 class ChartAdapterTests(SimpleTestCase):
     def test_metrics_are_converted_for_template(self):
@@ -801,6 +876,114 @@ class ChartAdapterTests(SimpleTestCase):
 
 
 class NewsDisplayTests(SimpleTestCase):
+    def test_news_only_model_buys_on_strong_consistent_recent_signals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            news_dir = Path(directory) / "news"
+            news_dir.mkdir()
+            path = news_dir / "BTC_news.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "published_at",
+                        "headline",
+                        "asset_impact",
+                        "relevance",
+                        "importance",
+                        "source_quality",
+                        "confidence",
+                        "novelty",
+                        "impact_horizon_hours",
+                    ],
+                )
+                writer.writeheader()
+                for index in range(3):
+                    writer.writerow(
+                        {
+                            "published_at": f"2026-10-08T0{index}:00:00+00:00",
+                            "headline": f"Bullish update {index}",
+                            "asset_impact": "0.8",
+                            "relevance": "1",
+                            "importance": "1",
+                            "source_quality": "1",
+                            "confidence": "1",
+                            "novelty": "1",
+                            "impact_horizon_hours": "48",
+                        }
+                    )
+
+            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
+                result = predict_news_buy_decision(
+                    "BTC", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
+                )
+
+        self.assertEqual(result["decision"], "BUY")
+        self.assertTrue(result["should_buy"])
+        self.assertEqual(result["articles_analyzed"], 3)
+        self.assertAlmostEqual(result["signal_score"], 0.8)
+
+    def test_news_only_model_rejects_stale_signals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            news_dir = Path(directory) / "news"
+            news_dir.mkdir()
+            path = news_dir / "ETH_news.csv"
+            path.write_text(
+                "published_at,headline,asset_impact,impact_horizon_hours\n"
+                "2026-10-01T00:00:00+00:00,Old rally,1,24\n",
+                encoding="utf-8",
+            )
+
+            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
+                with self.assertRaisesRegex(ValueError, "No active news signals"):
+                    predict_news_buy_decision(
+                        "ETH", now=datetime(2026, 10, 8, tzinfo=timezone.utc)
+                    )
+
+    def test_news_only_model_does_not_buy_on_bearish_signals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            news_dir = Path(directory) / "news"
+            news_dir.mkdir()
+            path = news_dir / "XAU_news.csv"
+            path.write_text(
+                "published_at,headline,asset_impact,impact_horizon_hours\n"
+                "2026-10-08T00:00:00+00:00,Bearish one,-0.7,48\n"
+                "2026-10-08T01:00:00+00:00,Bearish two,-0.5,48\n"
+                "2026-10-08T02:00:00+00:00,Bearish three,-0.8,48\n",
+                encoding="utf-8",
+            )
+
+            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
+                result = predict_news_buy_decision(
+                    "XAU", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
+                )
+
+        self.assertEqual(result["decision"], "DO NOT BUY")
+        self.assertFalse(result["should_buy"])
+        self.assertLess(result["signal_score"], 0)
+
+    def test_clear_news_deletes_only_requested_asset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            news_dir = Path(directory) / "news"
+            news_dir.mkdir()
+            btc_path = news_dir / "BTC_news.csv"
+            eth_path = news_dir / "ETH_news.csv"
+            btc_path.write_text("headline\nBitcoin update\n", encoding="utf-8")
+            eth_path.write_text("headline\nEthereum update\n", encoding="utf-8")
+
+            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
+                removed = clear_asset_news("btc")
+
+            self.assertTrue(removed)
+            self.assertFalse(btc_path.exists())
+            self.assertTrue(eth_path.exists())
+
+    def test_clear_news_reports_when_asset_has_no_saved_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
+                removed = clear_asset_news("BTC")
+
+        self.assertFalse(removed)
+
     def test_load_news_sorts_latest_first_and_rejects_unsafe_url(self):
         with tempfile.TemporaryDirectory() as directory:
             news_dir = Path(directory) / "news"

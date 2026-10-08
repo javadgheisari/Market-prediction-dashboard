@@ -2,6 +2,7 @@ from django import forms
 
 MODEL_CHOICES = (
     ("xgboost", "XGBoost Portfolio (recommended)"),
+    ("news_buy", "News-only buy decision"),
     ("chronos", "Chronos-2 (optional download)"),
     ("gru", "Improved GRU"),
     ("lstm", "Improved LSTM"),
@@ -229,7 +230,10 @@ class NameForm(forms.Form):
     def clean(self):
         cleaned_data = super().clean()
         uploaded_file = cleaned_data.get("market_csv")
-        if cleaned_data.get("price_source") == "upload":
+        if (
+            cleaned_data.get("model_name") != "news_buy"
+            and cleaned_data.get("price_source") == "upload"
+        ):
             if uploaded_file is None:
                 self.add_error("market_csv", "Choose a historical price CSV file.")
             elif not uploaded_file.name.lower().endswith(".csv"):

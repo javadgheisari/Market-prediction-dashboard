@@ -8,4 +8,5 @@ urlpatterns = [
     path('predict/<str:symbol_name>/', views.PredictView.as_view(), name='predict'),
     path('prices/<str:symbol_name>/download/', views.PriceCsvDownloadView.as_view(), name='download_prices'),
     path('news/<str:symbol_name>/crawl/', views.NewsCrawlView.as_view(), name='crawl_news'),
+    path('news/<str:symbol_name>/clear/', views.NewsClearView.as_view(), name='clear_news'),
 ]

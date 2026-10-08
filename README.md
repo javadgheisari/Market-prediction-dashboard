@@ -99,6 +99,13 @@ contains only a date is conservatively delayed until the next day to prevent
 look-ahead leakage. News impact decays over time according to
 `--news-half-life-hours` and is ignored after `--news-lookback-hours`.
 
+The dashboard also includes a **News-only buy decision** model. It does not
+load price data. It combines active articles using their asset impact,
+relevance, importance, source quality, confidence, novelty, recency, and impact
+horizon, then returns either `BUY` or `DO NOT BUY`. A buy requires both a
+positive weighted signal and sufficient consistent evidence. This output is an
+experimental research signal, not financial advice.
+
 See [`data/news/gold_news_sample.csv`](data/news/gold_news_sample.csv) for a
 complete example. Its dates must be adjusted or paired with market data from
 the same period before training.

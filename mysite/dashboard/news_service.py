@@ -1,6 +1,7 @@
 import sys
 import csv
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -14,6 +15,10 @@ if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
 
+def asset_news_path(symbol: str) -> Path:
+    return DATA_DIR / "news" / f"{symbol.upper()}_news.csv"
+
+
 def crawl_asset_news(symbol: str) -> dict[str, object]:
     """Run the project's RSS crawler for one dashboard asset."""
     from news_crawler import crawl_asset_news as crawl
@@ -21,11 +26,140 @@ def crawl_asset_news(symbol: str) -> dict[str, object]:
     return crawl(symbol, days=7, max_per_asset=100, timeout=20.0)
 
 
+def clear_asset_news(symbol: str) -> bool:
+    """Delete locally saved headlines for one asset, if they exist."""
+    path = asset_news_path(symbol)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _bounded_number(
+    row: dict[str, str], name: str, default: float, lower: float, upper: float
+) -> float:
+    try:
+        value = float(row.get(name, default) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(lower, min(upper, value))
+
+
+def predict_news_buy_decision(
+    symbol: str, *, now: datetime | None = None
+) -> dict[str, object]:
+    """Return a buy/no-buy decision using saved news signals only."""
+    path = asset_news_path(symbol)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"No crawled news file exists for {symbol.upper()}. Crawl news first."
+        )
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    else:
+        current_time = current_time.astimezone(timezone.utc)
+
+    signals = []
+    for row in rows:
+        try:
+            published_at = datetime.fromisoformat(
+                row.get("published_at", "").replace("Z", "+00:00")
+            )
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        else:
+            published_at = published_at.astimezone(timezone.utc)
+        age_hours = (current_time - published_at).total_seconds() / 3600
+        if age_hours < 0:
+            continue
+
+        horizon = _bounded_number(
+            row, "impact_horizon_hours", 48.0, 1.0, 720.0
+        )
+        if age_hours > horizon:
+            continue
+
+        impact = _bounded_number(row, "asset_impact", 0.0, -1.0, 1.0)
+        quality_values = (
+            _bounded_number(row, "relevance", 0.5, 0.0, 1.0),
+            _bounded_number(row, "importance", 0.5, 0.0, 1.0),
+            _bounded_number(row, "source_quality", 0.5, 0.0, 1.0),
+            _bounded_number(row, "confidence", 0.35, 0.0, 1.0),
+            _bounded_number(row, "novelty", 0.5, 0.0, 1.0),
+        )
+        quality = math.prod(quality_values) ** (1 / len(quality_values))
+        recency = 0.5 ** (age_hours / max(1.0, horizon / 2))
+        weight = quality * recency
+        if weight > 0:
+            signals.append(
+                {
+                    "impact": impact,
+                    "weight": weight,
+                    "headline": row.get("headline", ""),
+                    "published_at": published_at,
+                }
+            )
+
+    if not signals:
+        raise ValueError(
+            f"No active news signals are available for {symbol.upper()}. "
+            "Refresh the news and try again."
+        )
+
+    total_weight = sum(signal["weight"] for signal in signals)
+    score = sum(
+        signal["impact"] * signal["weight"] for signal in signals
+    ) / total_weight
+    disagreement = sum(
+        abs(signal["impact"] - score) * signal["weight"] for signal in signals
+    ) / total_weight
+    agreement = max(0.0, 1.0 - disagreement / 2)
+    evidence = 1.0 - math.exp(-total_weight / 1.5)
+    confidence = agreement * evidence
+    should_buy = score >= 0.15 and confidence >= 0.20
+
+    if should_buy:
+        explanation = (
+            "The active, quality-weighted news signal is sufficiently bullish."
+        )
+    elif score < 0:
+        explanation = (
+            "The active news signal is bearish, so the model does not support a buy."
+        )
+    else:
+        explanation = (
+            "The bullish news evidence is not strong or consistent enough to "
+            "support a buy."
+        )
+
+    strongest = max(
+        signals, key=lambda signal: abs(signal["impact"] * signal["weight"])
+    )
+    return {
+        "decision": "BUY" if should_buy else "DO NOT BUY",
+        "should_buy": should_buy,
+        "signal_score": round(score, 4),
+        "confidence_percent": round(confidence * 100, 1),
+        "articles_analyzed": len(signals),
+        "articles_saved": len(rows),
+        "strongest_headline": strongest["headline"],
+        "explanation": explanation,
+    }
+
+
 def load_asset_news(
     symbol: str, page: int | str = 1, per_page: int = 25
 ) -> dict[str, object]:
     """Load one page of locally saved headlines for dashboard display."""
-    path = DATA_DIR / "news" / f"{symbol.upper()}_news.csv"
+    path = asset_news_path(symbol)
     if not path.is_file():
         return {
             "rows": [],

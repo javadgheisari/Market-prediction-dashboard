@@ -34,6 +34,10 @@
                                     {% csrf_token %}
                                     <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
                                 </form>
+                                {% comment %} <form class="news-clear-form" method="post" action="{% url 'clear_news' symbol_name=symbol %}" data-symbol="{{ symbol }}">
+                                    {% csrf_token %}
+                                    <button class="btn btn-sm btn-outline-danger asset-news-btn" type="submit">Clear news</button>
+                                </form> {% endcomment %}
                             </div>
                         </div>
                         {% endfor %}
@@ -105,6 +109,17 @@
             const button = form.querySelector('button[type="submit"]');
             button.disabled = true;
             button.textContent = 'Crawling…';
+        });
+    });
+    document.querySelectorAll('.news-clear-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            if (!window.confirm(`Clear all saved news for ${form.dataset.symbol}?`)) {
+                event.preventDefault();
+                return;
+            }
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Clearing…';
         });
     });
 </script>

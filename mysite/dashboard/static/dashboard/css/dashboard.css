@@ -116,6 +116,12 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .metric-card { min-height: 96px; padding: 1rem; background: rgba(15,29,48,.7); border: 1px solid var(--app-border); border-radius: 13px; display: flex; flex-direction: column; justify-content: center; }
 .metric-label { color: var(--app-muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; margin-bottom: .4rem; }
 .metric-value { font-family: "Manrope", sans-serif; font-size: 1.12rem; font-weight: 700; }
+.news-decision-card { min-height: 360px; }
+.news-decision-text.is-buy { color: #4ade80; }
+.news-decision-text.is-no-buy { color: #f87171; }
+.news-decision-badge { display: inline-flex; align-items: center; min-height: 48px; padding: .65rem 1rem; border: 1px solid; border-radius: 12px; font-family: "Manrope", sans-serif; font-weight: 800; letter-spacing: .05em; }
+.news-decision-badge.is-buy { color: #86efac; background: rgba(34,197,94,.12); border-color: rgba(34,197,94,.35); }
+.news-decision-badge.is-no-buy { color: #fca5a5; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.35); }
 .chart-card { padding: .7rem; min-height: 500px; }
 .chart-actions { min-height: 35px; }
 .detailed-chart-modal { background: #0b1728; border: 1px solid var(--app-border); border-radius: 18px; overflow: hidden; }
