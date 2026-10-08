@@ -235,6 +235,35 @@ class ForecastFormTests(SimpleTestCase):
             ).is_valid()
         )
 
+    def test_chronos_and_advanced_configuration_are_validated(self):
+        form = NameForm(
+            {
+                "model_name": "chronos",
+                "data_source": "price_only",
+                "price_source": "bundled",
+                "predict_steps": 12,
+                "split_ratio": 0.75,
+                "chronos_model_id": "autogluon/chronos-2-small",
+                "chronos_context_length": 256,
+                "chronos_device": "cpu",
+            }
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        config = form.advanced_config()
+        self.assertEqual(config["chronos_context_length"], 256)
+        self.assertEqual(config["chronos_model_id"], "autogluon/chronos-2-small")
+
+        invalid = NameForm(
+            {
+                "model_name": "xgboost",
+                "data_source": "price_only",
+                "price_source": "bundled",
+                "predict_steps": 12,
+                "portfolio_size": 4,
+            }
+        )
+        self.assertFalse(invalid.is_valid())
+
     def test_asset_without_bundled_data_defaults_to_automatic_history(self):
         form = NameForm(bundled_available=False)
         self.assertEqual(form.fields["price_source"].choices[0][0], "forexsb")
@@ -530,6 +559,8 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertContains(response, "Saved BTC news")
         self.assertContains(response, "Refresh news")
+        self.assertContains(response, "Chronos-2")
+        self.assertContains(response, "Advanced model configuration")
 
     @patch("dashboard.views.news_service.load_asset_news")
     def test_news_impact_chart_is_available_for_news_selection(self, load_news):
@@ -596,6 +627,20 @@ class DashboardViewTests(SimpleTestCase):
             price_csv=None,
             price_source="bundled",
             use_news=False,
+            advanced_config={
+                "window": 60,
+                "split_ratio": 0.8,
+                "validation_ratio": 0.2,
+                "portfolio_size": 3,
+                "recency_half_life": 0.5,
+                "n_estimators": 300,
+                "max_depth": 3,
+                "learning_rate": 0.03,
+                "epochs": 50,
+                "chronos_model_id": "amazon/chronos-2",
+                "chronos_context_length": 512,
+                "chronos_device": "cpu",
+            },
         )
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
@@ -618,6 +663,20 @@ class DashboardViewTests(SimpleTestCase):
             price_csv=None,
             price_source="bundled",
             use_news=True,
+            advanced_config={
+                "window": 60,
+                "split_ratio": 0.8,
+                "validation_ratio": 0.2,
+                "portfolio_size": 3,
+                "recency_half_life": 0.5,
+                "n_estimators": 300,
+                "max_depth": 3,
+                "learning_rate": 0.03,
+                "epochs": 50,
+                "chronos_model_id": "amazon/chronos-2",
+                "chronos_context_length": 512,
+                "chronos_device": "cpu",
+            },
         )
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")

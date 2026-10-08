@@ -30,13 +30,31 @@
                     <form method="post" enctype="multipart/form-data" id="forecast-form">
                         {% csrf_token %}
                         {% for field in form %}
+                        {% if not field.field.widget.attrs.data_advanced %}
                         <div class="mb-3"{% if field.name == 'market_csv' %} id="market-csv-field"{% endif %}>
                             <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
                             {{ field }}
                             {% if field.help_text %}<div class="form-text text-white-50">{{ field.help_text }}</div>{% endif %}
                             {% for field_error in field.errors %}<div class="text-danger small">{{ field_error }}</div>{% endfor %}
                         </div>
+                        {% endif %}
                         {% endfor %}
+                        <details class="mb-3" id="advanced-settings"{% if form.errors %} open{% endif %}>
+                            <summary class="text-info mb-3">Advanced model configuration</summary>
+                            <div class="alert alert-info small" id="chronos-install-note" hidden>
+                                Chronos downloads model weights on first use and requires <code>chronos-forecasting</code>. CPU inference can take several minutes.
+                            </div>
+                            {% for field in form %}
+                            {% if field.field.widget.attrs.data_advanced %}
+                            <div class="mb-3 advanced-model-field" data-models="{{ field.field.widget.attrs.data_models }}">
+                                <label class="form-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+                                {{ field }}
+                                {% if field.help_text %}<div class="form-text text-white-50">{{ field.help_text }}</div>{% endif %}
+                                {% for field_error in field.errors %}<div class="text-danger small">{{ field_error }}</div>{% endfor %}
+                            </div>
+                            {% endif %}
+                            {% endfor %}
+                        </details>
                         <button class="btn btn-primary w-100" id="forecast-submit" type="submit">Train &amp; generate forecast</button>
                     </form>
                     <form class="news-crawl-form mt-2" method="post" action="{% url 'crawl_news' symbol_name=symbol_name %}">
@@ -210,11 +228,23 @@
     const priceSource = document.getElementById('id_price_source');
     const marketCsvField = document.getElementById('market-csv-field');
     const dataSource = document.getElementById('id_data_source');
+    const modelSelect = document.getElementById('id_model_name');
+    const advancedModelFields = document.querySelectorAll('.advanced-model-field');
+    const chronosInstallNote = document.getElementById('chronos-install-note');
     const newsImpactSection = document.getElementById('news-impact-section');
     let newsImpactChartRendered = false;
 
     function updateMarketCsvVisibility() {
         marketCsvField.hidden = priceSource.value !== 'upload';
+    }
+
+    function updateAdvancedModelFields() {
+        const selectedModel = modelSelect.value;
+        advancedModelFields.forEach(function (field) {
+            const models = field.dataset.models.split(' ');
+            field.hidden = !(models.includes('all') || models.includes(selectedModel));
+        });
+        chronosInstallNote.hidden = selectedModel !== 'chronos';
     }
 
     function renderNewsImpactChart() {
@@ -260,7 +290,9 @@
 
     priceSource.addEventListener('change', updateMarketCsvVisibility);
     dataSource.addEventListener('change', updateNewsImpactVisibility);
+    modelSelect.addEventListener('change', updateAdvancedModelFields);
     updateMarketCsvVisibility();
+    updateAdvancedModelFields();
     updateNewsImpactVisibility();
 
     document.getElementById('forecast-form').addEventListener('submit', function () {

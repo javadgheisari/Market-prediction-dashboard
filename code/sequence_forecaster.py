@@ -57,6 +57,17 @@ NEWS_IMPACT_COLUMNS = (
     "sentiment_score",
     "sentiment",
 )
+NEWS_EVENT_TYPES = (
+    "earnings",
+    "macro",
+    "monetary_policy",
+    "geopolitical",
+    "regulation",
+    "supply_demand",
+    "technical",
+    "company",
+    "other",
+)
 
 # These phrases describe likely pressure on gold, not the emotional tone of an
 # article. For other assets, supplying an explicit asset_impact column is much
@@ -315,19 +326,42 @@ def load_news_data(
         impacts = combined_text.map(score_gold_news)
         scoring_method = "gold_phrase_fallback"
 
-    quality = pd.Series(1.0, index=raw.index)
+    quality_components: list[pd.Series] = []
     quality_columns: list[str] = []
-    for column in ("relevance", "importance", "source_quality", "confidence"):
+    for column in (
+        "relevance",
+        "importance",
+        "source_quality",
+        "confidence",
+        "novelty",
+    ):
         if column in raw.columns:
             values = pd.to_numeric(raw[column], errors="coerce").fillna(1.0)
-            quality *= values.clip(0.0, 1.0)
+            quality_components.append(values.clip(0.0, 1.0))
             quality_columns.append(column)
+    if quality_components:
+        # Avoid shrinking five moderate scores almost to zero as a raw product.
+        component_frame = pd.concat(quality_components, axis=1)
+        quality = np.exp(np.log(component_frame.clip(lower=1e-6)).mean(axis=1))
+        quality[(component_frame == 0).any(axis=1)] = 0.0
+    else:
+        quality = pd.Series(1.0, index=raw.index)
+
+    impact_horizons = pd.to_numeric(
+        raw.get("impact_horizon_hours", pd.Series(np.nan, index=raw.index)),
+        errors="coerce",
+    ).clip(1.0, 720.0)
+    event_types = raw.get("event_type", pd.Series("other", index=raw.index))
+    event_types = event_types.fillna("other").astype(str).str.lower()
+    event_types = event_types.where(event_types.isin(NEWS_EVENT_TYPES), "other")
 
     news = pd.DataFrame(
         {
             "published_at": parsed_dates,
             "impact": impacts.clip(-1.0, 1.0),
             "quality": quality.clip(0.0, 1.0),
+            "impact_horizon_hours": impact_horizons,
+            "event_type": event_types,
         }
     )
     if text_columns:
@@ -352,8 +386,14 @@ def load_news_data(
         "quality_columns": quality_columns,
         "scoring_method": scoring_method,
         "date_only_rows_delayed_to_next_day": int(date_only.sum()),
+        "event_type_rows": int(
+            raw.get("event_type", pd.Series(dtype=str)).notna().sum()
+        ),
+        "impact_horizon_rows": int(impact_horizons.notna().sum()),
     }
-    return news[["published_at", "impact", "quality"]], metadata
+    return news[
+        ["published_at", "impact", "quality", "impact_horizon_hours", "event_type"]
+    ], metadata
 
 
 def build_news_features(
@@ -370,25 +410,41 @@ def build_news_features(
     news_ns = news["published_at"].array.asi8
     impacts = news["impact"].to_numpy(dtype=float)
     qualities = news["quality"].to_numpy(dtype=float)
+    event_types = news.get(
+        "event_type", pd.Series("other", index=news.index)
+    ).to_numpy()
+    impact_horizons = pd.to_numeric(
+        news.get("impact_horizon_hours", pd.Series(np.nan, index=news.index)),
+        errors="coerce",
+    ).to_numpy(dtype=float)
     hour_ns = float(pd.Timedelta(hours=1).value)
     lookback_ns = int(pd.Timedelta(hours=lookback_hours).value)
     day_ns = int(pd.Timedelta(hours=24).value)
+    empty_row = (0.0,) * (6 + len(NEWS_EVENT_TYPES))
 
-    rows: list[tuple[float, float, float, float, float]] = []
+    rows: list[tuple[float, ...]] = []
     for timestamp in market_ns:
         end = int(np.searchsorted(news_ns, timestamp, side="right"))
         start = int(np.searchsorted(news_ns, timestamp - lookback_ns, side="left"))
         day_start = int(np.searchsorted(news_ns, timestamp - day_ns, side="left"))
+        count_24h = float(end - day_start)
         if start == end:
-            rows.append((0.0, 0.0, 0.0, 0.0, float(end - day_start)))
+            rows.append((*empty_row, count_24h))
             continue
 
         ages = (timestamp - news_ns[start:end]) / hour_ns
-        decay = np.power(0.5, ages / half_life_hours)
+        row_horizons = impact_horizons[start:end]
+        # Treat the expected impact horizon as approximately two half-lives.
+        event_half_lives = np.where(
+            np.isfinite(row_horizons),
+            np.maximum(1.0, row_horizons / 2.0),
+            half_life_hours,
+        )
+        decay = np.power(0.5, ages / event_half_lives)
         weights = decay * qualities[start:end]
         weight_sum = float(weights.sum())
         if weight_sum <= np.finfo(float).eps:
-            rows.append((0.0, 0.0, 0.0, 0.0, float(end - day_start)))
+            rows.append((*empty_row, count_24h))
             continue
 
         recent_impacts = impacts[start:end]
@@ -398,8 +454,22 @@ def build_news_features(
         )
         bullish = float(np.sum(weights * np.clip(recent_impacts, 0.0, None)))
         bearish = float(np.sum(weights * np.clip(-recent_impacts, 0.0, None)))
+        current_types = event_types[start:end]
+        event_shares = tuple(
+            float(np.sum(weights[current_types == event_type]) / weight_sum)
+            for event_type in NEWS_EVENT_TYPES
+        )
         rows.append(
-            (mean_impact, bullish, bearish, disagreement, float(end - day_start))
+            (
+                mean_impact,
+                bullish,
+                bearish,
+                disagreement,
+                weight_sum,
+                float(np.max(decay)),
+                *event_shares,
+                count_24h,
+            )
         )
 
     return pd.DataFrame(
@@ -409,6 +479,9 @@ def build_news_features(
             "news_bullish_attention",
             "news_bearish_attention",
             "news_disagreement",
+            "news_attention_weight",
+            "news_freshness",
+            *[f"news_event_{event_type}" for event_type in NEWS_EVENT_TYPES],
             "news_count_24h",
         ],
         index=market_dates.index,

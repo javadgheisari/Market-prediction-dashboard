@@ -40,6 +40,10 @@ CSV_FIELDS = (
     "importance",
     "source_quality",
     "confidence",
+    "novelty",
+    "impact_horizon_hours",
+    "event_type",
+    "scoring_method",
     "source",
     "url",
     "article_id",
@@ -161,6 +165,10 @@ def article_row(article: Article, terms: list[str]) -> dict[str, str]:
         "importance": f"{importance:.2f}",
         "source_quality": "0.60",
         "confidence": f"{confidence:.2f}",
+        "novelty": "0.50",
+        "impact_horizon_hours": "48.00",
+        "event_type": "other",
+        "scoring_method": "lexical",
         "source": article.source,
         "url": article.url,
         "article_id": article_id,
@@ -223,6 +231,8 @@ def crawl_asset_news(
     timeout: float = 20.0,
     feed_template: str = DEFAULT_FEED_TEMPLATE,
     session: requests.Session | None = None,
+    scorer: str | None = None,
+    openai_model: str | None = None,
 ) -> dict[str, object]:
     """Fetch, score, merge, and save recent news for one configured asset."""
     if days < 1 or max_per_asset < 1 or timeout <= 0:
@@ -252,10 +262,31 @@ def crawl_asset_news(
     articles = sorted(
         articles, key=lambda item: item.published_at, reverse=True
     )[:max_per_asset]
+    rows = [article_row(article, terms) for article in articles]
+    resolved_scorer = (scorer or os.getenv("NEWS_SCORER", "lexical")).lower()
+    if resolved_scorer not in {"lexical", "openai"}:
+        raise ValueError("scorer must be 'lexical' or 'openai'.")
+    if resolved_scorer == "openai" and rows:
+        from news_scorer import DEFAULT_OPENAI_MODEL, score_headlines_openai
+
+        model = openai_model or os.getenv("OPENAI_NEWS_MODEL", DEFAULT_OPENAI_MODEL)
+        scores = score_headlines_openai(
+            normalized_symbol,
+            query,
+            [
+                {"article_id": row["article_id"], "headline": row["headline"]}
+                for row in rows
+            ],
+            model=model,
+            timeout=max(timeout, 45.0),
+            session=session,
+        )
+        for row in rows:
+            row.update(scores[row["article_id"]])
     path = output_dir / f"{normalized_symbol}_news.csv"
     merged = merge_rows(
         read_existing(path),
-        [article_row(article, terms) for article in articles],
+        rows,
     )
     write_rows(path, merged)
     return {
@@ -263,6 +294,7 @@ def crawl_asset_news(
         "fetched": len(articles),
         "saved": len(merged),
         "path": path,
+        "scorer": resolved_scorer,
     }
 
 
@@ -276,6 +308,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--delay", type=float, default=0.5, help="Seconds between feed requests")
     parser.add_argument("--feed-template", default=DEFAULT_FEED_TEMPLATE)
+    parser.add_argument(
+        "--scorer",
+        choices=("lexical", "openai"),
+        default=os.getenv("NEWS_SCORER", "lexical"),
+        help="Headline scorer; OpenAI requires OPENAI_API_KEY.",
+    )
+    parser.add_argument(
+        "--openai-model",
+        default=os.getenv("OPENAI_NEWS_MODEL", "gpt-6-luna"),
+    )
     return parser
 
 
@@ -303,6 +345,8 @@ def main() -> int:
                 timeout=args.timeout,
                 feed_template=args.feed_template,
                 session=session,
+                scorer=args.scorer,
+                openai_model=args.openai_model,
             )
             print(
                 f"{symbol}: fetched {result['fetched']}, "

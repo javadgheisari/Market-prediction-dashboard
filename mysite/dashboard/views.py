@@ -139,11 +139,14 @@ class PredictView(View):
                         price_csv=price_csv,
                         price_source=form.cleaned_data["price_source"],
                         use_news=data_source == "with_news",
+                        advanced_config=form.advanced_config(),
                     )
                 context.update(
                     {
                         "symbol_name": symbol,
-                        "model_name": model_name.upper(),
+                        "model_name": dict(form.fields["model_name"].choices).get(
+                            model_name, model_name.upper()
+                        ),
                         "data_source": data_source,
                         "price_source": form.cleaned_data["price_source"],
                         "predict_steps": predict_steps,

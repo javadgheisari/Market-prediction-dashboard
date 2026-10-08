@@ -1,13 +1,13 @@
 # Market Prediction Dashboard
 
 A research and demonstration project for forecasting Forex, cryptocurrency,
-commodity, and US stock prices with LSTM, GRU, and XGBoost models. The
-repository contains:
+commodity, and US stock prices with LSTM and GRU models plus a
+validation-selected XGBoost portfolio. The repository contains:
 
 - an improved, leakage-aware command-line forecasting pipeline that combines
   market candles with timestamped asset news;
 - a Django dashboard for selecting an asset and running the improved LSTM or
-  GRU pipeline or the XGBoost forecaster; and
+  GRU pipeline or the XGBoost portfolio; and
 - sample OHLCV datasets for the symbols displayed by the dashboard.
 
 > **Important:** The forecasts are experimental and are not financial advice.
@@ -84,8 +84,10 @@ published_at,headline,asset_impact,relevance,importance,source_quality,confidenc
 - `+1` is strongly bullish.
 
 Numeric values or labels such as `bullish`, `neutral`, and `bearish` are
-accepted. Optional `relevance`, `importance`, `source_quality`, and `confidence`
-columns must contain values from 0 to 1 and are combined into a quality weight.
+accepted. Optional `relevance`, `importance`, `source_quality`, `confidence`, and
+`novelty` columns must contain values from 0 to 1 and are combined with a
+geometric-mean quality weight. `event_type` and `impact_horizon_hours` add
+event-regime features and event-specific causal decay when available.
 
 For files whose name contains `gold` or `XAU`, the trainer can estimate impact
 from headline/body text with a small built-in phrase scorer when no impact
@@ -117,10 +119,21 @@ deduplicates them by URL. Omit `--assets` to collect every symbol in
 `config/news_assets.json`; edit that file to add assets or refine search terms.
 
 The crawler assigns a deliberately low-confidence, keyword-based
-`asset_impact` estimate so its output can be read by the forecasting pipeline.
-Treat it as a baseline: review the scores or replace them with a dedicated
-asset-impact model before relying on them in an experiment. To use a different
-RSS search service, pass a URL template containing `{query}` via
+`asset_impact` estimate by default. For asset-specific structured scoring, set
+an API key and explicitly select the optional OpenAI scorer:
+
+```bash
+export OPENAI_API_KEY="..."
+python code/news_crawler.py --assets XAU BTC AAPL --days 7 --scorer openai
+```
+
+The scorer uses GPT-6 Luna by default and records impact, relevance, importance,
+confidence, novelty, expected impact horizon, event type, and scoring method.
+Only the symbol, asset description, local article ID, and headline are sent.
+Set `OPENAI_NEWS_MODEL` or pass `--openai-model` to change the model. The local
+lexical path remains the default and requires no API key or API spend. For the
+Django crawl button, opt in with `NEWS_SCORER=openai`; otherwise it stays local.
+To use a different RSS service, pass a URL template containing `{query}` via
 `--feed-template`.
 
 ## Train an improved model
@@ -181,15 +194,37 @@ venv/bin/python code/improved_xgboost.py \
   --date-col Asia/Tehran --forecast-steps 24
 ```
 
-It is also available as **XGBoost** in the Django model selector. The CPU-only
-package is pinned to avoid downloading unnecessary GPU runtime libraries.
+It is also available as **XGBoost Portfolio (recommended)** in the Django model
+selector. The CPU-only package is pinned to avoid unnecessary GPU libraries.
 
-The pipeline predicts a complete horizon of log returns, uses a chronological
-validation/test split, compares one-step test forecasts with a last-price
-baseline, and selects return shrinkage using validation data only. XGBoost also
-uses the validation partition for early stopping. Its default single-worker
-setting avoids CPU oversubscription in a web request; use `--n-jobs N` only when
-profiling shows that additional workers help on your machine.
+The pipeline trains three differently regularized members, applies smooth
+recency weighting, and uses the chronological validation partition to choose a
+member, a blend, or the zero-return naive forecast independently for every
+horizon. The untouched test partition remains a walk-forward evaluation. This
+prevents the dashboard from forcing a weak trained model into the result. Use
+`--portfolio-size 1` for the old single-model cost profile, or adjust
+`--recency-half-life` after profiling regime sensitivity. Early stopping and
+return shrinkage use validation data only; the default single-worker setting
+avoids CPU oversubscription in web requests.
+
+### Chronos-2 in the dashboard
+
+Chronos-2 is an optional dashboard model because it adds PyTorch/Transformers
+and downloads model weights on first use. Install it after the base environment:
+
+```bash
+venv/bin/python -m pip install -r requirements-chronos.txt
+```
+
+Then choose **Chronos-2** in the model selector. Its advanced controls select the
+checkpoint, context length, device, and chronological split. The dashboard runs
+a causal held-out evaluation, displays p10/p50/p90 forecast paths, and reports
+whether Chronos beats the last-price baseline. When news is enabled, only news
+known at the forecast origin enters the context; future news inputs are zero.
+
+A global Temporal Fusion Transformer remains a later experiment: it should be
+trained across sufficiently deep histories for all assets, not fitted
+independently to the small per-asset CSVs currently bundled.
 
 ### Generated outputs
 
@@ -223,8 +258,10 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Open <http://127.0.0.1:8000/>, select an asset, choose Improved GRU or Improved
-LSTM, and enter the number of forecast steps. One step is one candle interval
+Open <http://127.0.0.1:8000/>, select an asset, choose the recommended XGBoost
+portfolio, Chronos-2, Improved GRU, or Improved LSTM, and enter the forecast
+horizon. Expand **Advanced model configuration** for bounded model-specific
+controls; fields that do not apply to the selected model are hidden. One step is one candle interval
 in the selected CSV (one hour for the bundled hourly datasets). The request
 trains a model, so it can take several minutes on a CPU. The result page shows
 actual prices, one-step test predictions, future predictions, error metrics,

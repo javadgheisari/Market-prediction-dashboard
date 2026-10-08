@@ -1,4 +1,4 @@
-"""Leakage-aware XGBoost market forecasting pipeline."""
+"""Leakage-aware XGBoost portfolio for direct market forecasting."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_absolute_error
 from xgboost import XGBRegressor
 
 from sequence_forecaster import (
@@ -33,9 +34,115 @@ from sequence_forecaster import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def first_horizon(values: np.ndarray) -> np.ndarray:
-    values = np.asarray(values)
-    return values if values.ndim == 1 else values[:, 0]
+def _as_2d(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    return values[:, None] if values.ndim == 1 else values
+
+
+def _recency_weights(sample_count: int, half_life_fraction: float) -> np.ndarray:
+    """Return smoothly increasing weights without discarding older regimes."""
+    half_life = max(1.0, sample_count * half_life_fraction)
+    age = np.arange(sample_count - 1, -1, -1, dtype=float)
+    weights = np.power(0.5, age / half_life)
+    return weights / np.mean(weights)
+
+
+def _portfolio_specs(
+    n_estimators: int,
+    max_depth: int,
+    learning_rate: float,
+    seed: int,
+    portfolio_size: int,
+) -> list[dict[str, Any]]:
+    candidates = [
+        {
+            "name": "balanced",
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "min_child_weight": 2.0,
+            "subsample": 0.85,
+            "colsample_bytree": 0.85,
+            "reg_alpha": 0.05,
+            "reg_lambda": 1.5,
+            "random_state": seed,
+        },
+        {
+            "name": "conservative",
+            "n_estimators": max(100, int(n_estimators * 1.15)),
+            "max_depth": max(2, max_depth - 1),
+            "learning_rate": learning_rate * 0.8,
+            "min_child_weight": 5.0,
+            "subsample": 0.9,
+            "colsample_bytree": 0.9,
+            "reg_alpha": 0.15,
+            "reg_lambda": 3.0,
+            "random_state": seed + 1,
+        },
+        {
+            "name": "adaptive",
+            "n_estimators": max(100, int(n_estimators * 1.25)),
+            "max_depth": min(6, max_depth + 1),
+            "learning_rate": learning_rate * 0.7,
+            "min_child_weight": 3.0,
+            "subsample": 0.75,
+            "colsample_bytree": 0.75,
+            "reg_alpha": 0.1,
+            "reg_lambda": 2.0,
+            "random_state": seed + 2,
+        },
+    ]
+    return candidates[:portfolio_size]
+
+
+def _select_portfolio_weights(
+    actual: np.ndarray, calibrated_predictions: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    """Choose per-horizon members/blends using validation MAE only.
+
+    The zero-return naive forecast is an explicit candidate. This prevents a
+    weak model from being forced into the final forecast merely because it was
+    trained successfully.
+    """
+    actual = _as_2d(actual)
+    members = np.asarray(calibrated_predictions, dtype=float)
+    member_count, sample_count, horizon_count = members.shape
+    if actual.shape != (sample_count, horizon_count):
+        raise ValueError("Portfolio predictions must match validation targets.")
+
+    weights = np.zeros((horizon_count, member_count), dtype=float)
+    combined = np.zeros_like(actual)
+    diagnostics: list[dict[str, Any]] = []
+    for horizon in range(horizon_count):
+        target = actual[:, horizon]
+        member_mae = np.asarray(
+            [mean_absolute_error(target, member[:, horizon]) for member in members]
+        )
+        inverse = 1.0 / np.maximum(member_mae, np.finfo(float).eps)
+        blend_weights = inverse / inverse.sum()
+        choices = [np.zeros(member_count)]
+        choices.extend(np.eye(member_count))
+        choices.append(blend_weights)
+        choice_predictions = [
+            sum(weight[index] * members[index, :, horizon] for index in range(member_count))
+            for weight in choices
+        ]
+        errors = [mean_absolute_error(target, prediction) for prediction in choice_predictions]
+        selected = int(np.argmin(errors))
+        weights[horizon] = choices[selected]
+        combined[:, horizon] = choice_predictions[selected]
+        labels = ["naive_zero", *[f"member_{i}" for i in range(member_count)], "blend"]
+        diagnostics.append(
+            {
+                "horizon": horizon + 1,
+                "selected": labels[selected],
+                "validation_mae": float(errors[selected]),
+                "naive_mae": float(errors[0]),
+                "member_mae": member_mae.tolist(),
+                "weights": weights[horizon].tolist(),
+            }
+        )
+    return weights, combined, diagnostics
 
 
 def train_and_forecast_xgboost(
@@ -54,6 +161,8 @@ def train_and_forecast_xgboost(
     learning_rate: float = 0.03,
     early_stopping_rounds: int = 30,
     n_jobs: int = 1,
+    portfolio_size: int = 3,
+    recency_half_life: float = 0.5,
     news_half_life_hours: float = 24.0,
     news_lookback_hours: float = 168.0,
     news_date_col: str | None = None,
@@ -61,23 +170,18 @@ def train_and_forecast_xgboost(
     interval_minutes: float | None = None,
     save_model: bool = True,
 ) -> dict[str, Any]:
-    """Train XGBoost on rolling causal features and forecast a direct horizon."""
+    """Train a validation-selected portfolio and forecast a direct horizon."""
     if min(
-        window,
-        forecast_steps,
-        n_estimators,
-        max_depth,
-        early_stopping_rounds,
-        n_jobs,
+        window, forecast_steps, n_estimators, max_depth,
+        early_stopping_rounds, n_jobs, portfolio_size,
     ) < 1:
-        raise ValueError(
-            "window, forecast_steps, n_estimators, max_depth, "
-            "early_stopping_rounds, and n_jobs must be positive."
-        )
+        raise ValueError("Training counts, dimensions, and portfolio_size must be positive.")
+    if portfolio_size > 3:
+        raise ValueError("portfolio_size cannot exceed the three configured members.")
     if not 0.5 <= split_ratio < 1 or not 0 < validation_ratio < 0.5:
         raise ValueError("Invalid chronological split configuration.")
-    if learning_rate <= 0:
-        raise ValueError("learning_rate must be positive.")
+    if learning_rate <= 0 or recency_half_life <= 0:
+        raise ValueError("learning_rate and recency_half_life must be positive.")
     if news_half_life_hours <= 0 or news_lookback_hours <= 0:
         raise ValueError("News half-life and lookback must be positive.")
     if interval_minutes is not None and interval_minutes <= 0:
@@ -90,11 +194,8 @@ def train_and_forecast_xgboost(
     news_features = None
     if news_csv_path is not None:
         news, news_metadata = load_news_data(
-            news_csv_path,
-            dates,
-            csv_path.stem,
-            date_col=news_date_col,
-            impact_col=news_impact_col,
+            news_csv_path, dates, csv_path.stem,
+            date_col=news_date_col, impact_col=news_impact_col,
         )
         news_features = build_news_features(
             dates, news, news_half_life_hours, news_lookback_hours
@@ -122,8 +223,7 @@ def train_and_forecast_xgboost(
         raise ValueError("The test partition must contain at least two rows.")
     if news_features is not None and news_metadata is not None:
         training_coverage = float(
-            np.mean(news_features.iloc[:validation_start].abs().sum(axis=1) > 0)
-            * 100
+            np.mean(news_features.iloc[:validation_start].abs().sum(axis=1) > 0) * 100
         )
         news_metadata["training_feature_coverage_percent"] = training_coverage
         if training_coverage == 0:
@@ -133,151 +233,174 @@ def train_and_forecast_xgboost(
             )
 
     return_bounds = estimate_return_bounds(log_returns[1:validation_start])
-
     x_train, y_train = make_sequences(
-        feature_values,
-        log_returns,
-        window,
-        forecast_steps,
-        window,
-        validation_start - forecast_steps + 1,
+        feature_values, log_returns, window, forecast_steps,
+        window, validation_start - forecast_steps + 1,
     )
     x_validation, y_validation = make_sequences(
-        feature_values,
-        log_returns,
-        window,
-        forecast_steps,
-        validation_start,
-        split_index - forecast_steps + 1,
+        feature_values, log_returns, window, forecast_steps,
+        validation_start, split_index - forecast_steps + 1,
     )
     x_train = x_train.reshape(len(x_train), -1)
     x_validation = x_validation.reshape(len(x_validation), -1)
+    sample_weight = _recency_weights(len(x_train), recency_half_life)
 
-    model = XGBRegressor(
-        objective="reg:squarederror",
-        n_estimators=n_estimators,
-        max_depth=max_depth,
-        learning_rate=learning_rate,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.05,
-        reg_lambda=1.0,
-        random_state=seed,
-        n_jobs=n_jobs,
-        tree_method="hist",
-        eval_metric="mae",
-        early_stopping_rounds=min(early_stopping_rounds, n_estimators),
+    models: list[XGBRegressor] = []
+    member_scales: list[np.ndarray] = []
+    member_validation: list[np.ndarray] = []
+    member_metadata: list[dict[str, Any]] = []
+    specs = _portfolio_specs(
+        n_estimators, max_depth, learning_rate, seed, portfolio_size
     )
-    model.fit(
-        x_train,
-        y_train,
-        eval_set=[(x_validation, y_validation)],
-        verbose=False,
-    )
+    for spec in specs:
+        model = XGBRegressor(
+            objective="reg:squarederror",
+            n_estimators=spec["n_estimators"],
+            max_depth=spec["max_depth"],
+            learning_rate=spec["learning_rate"],
+            min_child_weight=spec["min_child_weight"],
+            subsample=spec["subsample"],
+            colsample_bytree=spec["colsample_bytree"],
+            reg_alpha=spec["reg_alpha"],
+            reg_lambda=spec["reg_lambda"],
+            random_state=spec["random_state"],
+            n_jobs=n_jobs,
+            tree_method="hist",
+            eval_metric="mae",
+            early_stopping_rounds=min(early_stopping_rounds, spec["n_estimators"]),
+        )
+        model.fit(
+            x_train,
+            y_train,
+            sample_weight=sample_weight,
+            eval_set=[(x_validation, y_validation)],
+            verbose=False,
+        )
+        raw_validation = clip_predicted_returns(
+            _as_2d(model.predict(x_validation)), return_bounds
+        )
+        scales = calibrate_return_scales(y_validation, raw_validation)
+        calibrated = raw_validation * scales[None, :]
+        models.append(model)
+        member_scales.append(scales)
+        member_validation.append(calibrated)
+        member_metadata.append(
+            {
+                **spec,
+                "best_iteration": int(model.best_iteration),
+                "selected_trees": int(model.best_iteration + 1),
+                "validation_mae": float(mean_absolute_error(y_validation, calibrated)),
+                "return_scales": scales.tolist(),
+            }
+        )
 
-    validation_predictions = clip_predicted_returns(
-        model.predict(x_validation), return_bounds
+    validation_members = np.asarray(member_validation)
+    portfolio_weights, validation_predictions, horizon_selection = (
+        _select_portfolio_weights(y_validation, validation_members)
     )
-    if validation_predictions.ndim == 1:
-        validation_predictions = validation_predictions[:, None]
-    return_scales = calibrate_return_scales(y_validation, validation_predictions)
+    return_scales = np.sum(
+        portfolio_weights * np.asarray(member_scales).T, axis=1
+    )
     return_scale = float(return_scales[0])
 
     x_test = np.asarray(
-        [
-            feature_values[i - window : i].reshape(-1)
-            for i in range(split_index, len(df))
-        ],
+        [feature_values[i - window : i].reshape(-1) for i in range(split_index, len(df))],
         dtype=np.float32,
     )
-    raw_test_returns = clip_predicted_returns(
-        first_horizon(model.predict(x_test)), return_bounds
+    raw_test_member_returns = np.asarray(
+        [
+            clip_predicted_returns(_as_2d(model.predict(x_test))[:, 0], return_bounds)
+            for model in models
+        ]
     )
-    predicted_returns = raw_test_returns * return_scale
+    test_member_returns = raw_test_member_returns * np.asarray(
+        [scales[0] for scales in member_scales]
+    )[:, None]
+    predicted_returns = np.sum(
+        portfolio_weights[0, :, None] * test_member_returns, axis=0
+    )
+    raw_predicted_returns = np.sum(
+        portfolio_weights[0, :, None] * raw_test_member_returns, axis=0
+    )
     previous_close = close[split_index - 1 : len(df) - 1]
     test_predictions = previous_close * np.exp(predicted_returns)
     actual_test = close[split_index:]
     baseline_metrics = calculate_metrics(actual_test, previous_close)
     model_metrics = calculate_metrics(actual_test, test_predictions)
-    raw_model_metrics = calculate_metrics(
-        actual_test, previous_close * np.exp(raw_test_returns)
-    )
     model_metrics["directional_accuracy_percent"] = float(
         np.mean(
             np.sign(actual_test - previous_close)
             == np.sign(test_predictions - previous_close)
-        )
-        * 100
+        ) * 100
     )
     model_metrics["mae_skill_vs_naive_percent"] = float(
         (1 - model_metrics["mae"] / baseline_metrics["mae"]) * 100
-        if baseline_metrics["mae"] > 0
-        else 0.0
+        if baseline_metrics["mae"] > 0 else 0.0
     )
 
     final_window = feature_values[-window:].reshape(1, -1)
-    future_returns = (
-        clip_predicted_returns(
-            np.asarray(model.predict(final_window)).reshape(-1), return_bounds
-        )
-        * return_scales
+    future_member_returns = np.asarray(
+        [
+            clip_predicted_returns(
+                _as_2d(model.predict(final_window))[0], return_bounds
+            ) * member_scales[index]
+            for index, model in enumerate(models)
+        ]
     )
+    future_returns = np.sum(portfolio_weights.T * future_member_returns, axis=0)
     future_predictions = close[-1] * np.exp(np.cumsum(future_returns))
     probabilities = estimate_direction_probabilities(
         future_returns,
         y_validation,
-        validation_predictions * return_scales[None, :],
+        validation_predictions,
         seed,
     )
     interval = (
         pd.Timedelta(minutes=interval_minutes)
-        if interval_minutes is not None
-        else infer_interval(dates)
+        if interval_minutes is not None else infer_interval(dates)
     )
     future_dates = make_future_dates(dates, forecast_steps, interval)
     uncertainty = probabilities["cumulative_log_return_quantiles"]
     context_start = max(0, split_index - window)
     metrics: dict[str, Any] = {
-        "model": "XGBOOST",
+        "model": "XGBOOST_PORTFOLIO" if len(models) > 1 else "XGBOOST",
         "rows": len(df),
         "train_samples": len(x_train),
         "validation_samples": len(x_validation),
         "test_samples": len(actual_test),
         "news": news_metadata,
-        "best_iteration": int(model.best_iteration),
-        "selected_trees": int(model.best_iteration + 1),
+        "portfolio": {
+            "members": member_metadata,
+            "horizon_selection": horizon_selection,
+            "recency_half_life_fraction": recency_half_life,
+            "sample_weight_min": float(sample_weight.min()),
+            "sample_weight_max": float(sample_weight.max()),
+        },
+        "best_iteration": int(models[0].best_iteration),
+        "selected_trees": int(models[0].best_iteration + 1),
         "prediction_return_bounds": list(return_bounds),
         "validation_selected_return_scale": return_scale,
         "validation_selected_return_scales": return_scales.tolist(),
+        "validation_portfolio_mae": float(
+            mean_absolute_error(y_validation, validation_predictions)
+        ),
         "model_metrics": model_metrics,
-        "raw_unscaled_model_metrics": raw_model_metrics,
+        "raw_unscaled_model_metrics": calculate_metrics(
+            actual_test, previous_close * np.exp(raw_predicted_returns)
+        ),
         "naive_last_price_baseline": baseline_metrics,
         "forecast_direction_probability": probabilities,
         "chart": {
-            "title": f"{extract_asset_symbol(csv_path.stem)} price forecast (XGBoost)",
-            "actual_dates": [
-                value.strftime("%Y-%m-%d %H:%M")
-                for value in dates.iloc[context_start:]
-            ],
+            "title": f"{extract_asset_symbol(csv_path.stem)} price forecast (XGBoost portfolio)",
+            "actual_dates": [value.strftime("%Y-%m-%d %H:%M") for value in dates.iloc[context_start:]],
             "actual_prices": close[context_start:].tolist(),
-            "test_dates": [
-                value.strftime("%Y-%m-%d %H:%M")
-                for value in dates.iloc[split_index:]
-            ],
+            "test_dates": [value.strftime("%Y-%m-%d %H:%M") for value in dates.iloc[split_index:]],
             "test_predictions": test_predictions.tolist(),
-            "future_dates": [
-                value.strftime("%Y-%m-%d %H:%M") for value in future_dates
-            ],
+            "future_dates": [value.strftime("%Y-%m-%d %H:%M") for value in future_dates],
             "future_predictions": future_predictions.tolist(),
-            "future_lower": (
-                close[-1] * np.exp(np.asarray(uncertainty["p10"]))
-            ).tolist(),
-            "future_median": (
-                close[-1] * np.exp(np.asarray(uncertainty["p50"]))
-            ).tolist(),
-            "future_upper": (
-                close[-1] * np.exp(np.asarray(uncertainty["p90"]))
-            ).tolist(),
+            "future_lower": (close[-1] * np.exp(np.asarray(uncertainty["p10"]))).tolist(),
+            "future_median": (close[-1] * np.exp(np.asarray(uncertainty["p50"]))).tolist(),
+            "future_upper": (close[-1] * np.exp(np.asarray(uncertainty["p90"]))).tolist(),
             "forecast_interval_percent": 80,
         },
     }
@@ -286,7 +409,10 @@ def train_and_forecast_xgboost(
         model_dir = PROJECT_ROOT / "models"
         model_dir.mkdir(parents=True, exist_ok=True)
         stem = f"xgboost_{csv_path.stem}"
-        model.save_model(str(model_dir / f"{stem}.json"))
+        primary_index = int(np.argmax(portfolio_weights[0]))
+        models[primary_index].save_model(str(model_dir / f"{stem}.json"))
+        for index, model in enumerate(models):
+            model.save_model(str(model_dir / f"{stem}_member_{index}.json"))
         with (model_dir / f"{stem}_preprocessing.pkl").open("wb") as output:
             pickle.dump(
                 {
@@ -294,10 +420,11 @@ def train_and_forecast_xgboost(
                     "feature_names": list(features.columns),
                     "return_scale": return_scale,
                     "return_scales": return_scales.tolist(),
+                    "member_return_scales": [value.tolist() for value in member_scales],
+                    "portfolio_weights": portfolio_weights.tolist(),
+                    "portfolio_members": member_metadata,
                     "return_bounds": return_bounds,
                     "forecast_steps": forecast_steps,
-                    "best_iteration": int(model.best_iteration),
-                    "n_estimators": int(model.best_iteration + 1),
                 },
                 output,
             )
@@ -320,6 +447,8 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=0.03)
     parser.add_argument("--early-stopping-rounds", type=int, default=30)
     parser.add_argument("--n-jobs", type=int, default=1)
+    parser.add_argument("--portfolio-size", type=int, choices=(1, 2, 3), default=3)
+    parser.add_argument("--recency-half-life", type=float, default=0.5)
     parser.add_argument("--news-date-col")
     parser.add_argument("--news-impact-col")
     parser.add_argument("--news-half-life-hours", type=float, default=24.0)
@@ -338,6 +467,8 @@ def main() -> None:
         learning_rate=args.learning_rate,
         early_stopping_rounds=args.early_stopping_rounds,
         n_jobs=args.n_jobs,
+        portfolio_size=args.portfolio_size,
+        recency_half_life=args.recency_half_life,
         news_date_col=args.news_date_col,
         news_impact_col=args.news_impact_col,
         news_half_life_hours=args.news_half_life_hours,

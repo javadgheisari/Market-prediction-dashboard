@@ -1,0 +1,2 @@
+# Optional dashboard dependency. Install after the base requirements.
+chronos-forecasting==2.3.2

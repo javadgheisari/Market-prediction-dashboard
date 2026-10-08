@@ -18,7 +18,8 @@ if str(CODE_DIR) not in sys.path:
 MODEL_KINDS = {
     "lstm": "LSTM",
     "gru": "GRU",
-    "xgboost": "XGBOOST",
+    "xgboost": "XGBOOST_PORTFOLIO",
+    "chronos": "CHRONOS_2",
 }
 
 UTC = "UTC"
@@ -150,6 +151,7 @@ def run_dashboard_forecast(
     price_csv: Path | None,
     use_news: bool,
     price_source: str = "bundled",
+    advanced_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train the selected improved model and return JSON-safe chart data."""
     if model_name not in MODEL_KINDS:
@@ -178,6 +180,7 @@ def run_dashboard_forecast(
                     training_price_csv=training_price_csv,
                     predict_steps=predict_steps,
                     news_csv=news_csv,
+                    advanced_config=advanced_config or {},
                 )
     return build_plotly_chart(metrics)
 
@@ -187,6 +190,7 @@ def _train_model(
     training_price_csv: Path,
     predict_steps: int,
     news_csv: Path | None,
+    advanced_config: dict[str, Any],
 ) -> dict[str, Any]:
     """Run a model against an already downloaded and refreshed price file."""
     if model_name == "xgboost":
@@ -198,12 +202,49 @@ def _train_model(
             close_col="Close",
             forecast_steps=predict_steps,
             news_csv_path=news_csv,
+            window=int(advanced_config.get("window", 60)),
+            split_ratio=float(advanced_config.get("split_ratio", 0.8)),
+            validation_ratio=float(advanced_config.get("validation_ratio", 0.2)),
+            portfolio_size=int(advanced_config.get("portfolio_size", 3)),
+            recency_half_life=float(
+                advanced_config.get("recency_half_life", 0.5)
+            ),
+            n_estimators=int(advanced_config.get("n_estimators", 300)),
+            max_depth=int(advanced_config.get("max_depth", 3)),
+            learning_rate=float(advanced_config.get("learning_rate", 0.03)),
+        )
+    if model_name == "chronos":
+        from chronos_challenger import train_and_forecast_chronos
+
+        return train_and_forecast_chronos(
+            csv_path=training_price_csv,
+            date_col=resolve_date_column(training_price_csv),
+            close_col="Close",
+            forecast_steps=predict_steps,
+            news_csv_path=news_csv,
+            split_ratio=float(advanced_config.get("split_ratio", 0.8)),
+            context_length=int(
+                advanced_config.get("chronos_context_length", 512)
+            ),
+            model_id=str(
+                advanced_config.get("chronos_model_id", "amazon/chronos-2")
+            ),
+            device_map=str(advanced_config.get("chronos_device", "cpu")),
         )
     else:
         from sequence_forecaster import ForecastConfig, train_and_forecast
 
+        epochs = int(advanced_config.get("epochs", 50))
         config = replace(
-            ForecastConfig(epochs=50, patience=10),
+            ForecastConfig(
+                window=int(advanced_config.get("window", 60)),
+                split_ratio=float(advanced_config.get("split_ratio", 0.8)),
+                validation_ratio=float(
+                    advanced_config.get("validation_ratio", 0.2)
+                ),
+                epochs=epochs,
+                patience=max(5, min(15, epochs // 3)),
+            ),
             forecast_steps=predict_steps,
         )
         return train_and_forecast(
