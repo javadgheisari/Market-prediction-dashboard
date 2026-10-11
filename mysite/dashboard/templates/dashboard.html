@@ -17,7 +17,16 @@
         {% for category, symbols in asset_groups.items %}
         <section class="market-group {% if category == 'Cryptocurrency' %}order-2 col-12{% else %}market-group-compact order-1 col-sm-6 col-lg-5{% endif %}" data-market-category="{{ category }}">
             <div class="app-card asset-card">
-                <div class="asset-card-header"><h3 class="h5 mb-0">{{ category }}</h3><span class="asset-count">{{ symbols|length }} assets</span></div>
+                <div class="asset-card-header">
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                        <h3 class="h5 mb-0">{{ category }}</h3>
+                        <span class="asset-count">{{ symbols|length }} assets</span>
+                    </div>
+                    <form class="market-refresh-form" method="post" action="{% url 'market_recommendations' market_slug=category|slugify %}" data-market="{{ category }}">
+                        {% csrf_token %}
+                        <button class="btn btn-sm btn-info market-recommendations-btn" type="submit">Refresh news &amp; rank buys</button>
+                    </form>
+                </div>
                 <div class="card-body pt-1">
                     <div class="{% if category == 'Cryptocurrency' %}crypto-asset-grid{% endif %}">
                         {% for symbol in symbols %}
@@ -34,10 +43,10 @@
                                     {% csrf_token %}
                                     <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
                                 </form>
-                                {% comment %} <form class="news-clear-form" method="post" action="{% url 'clear_news' symbol_name=symbol %}" data-symbol="{{ symbol }}">
+                                <form class="news-clear-form" method="post" action="{% url 'clear_news' symbol_name=symbol %}" data-symbol="{{ symbol }}">
                                     {% csrf_token %}
                                     <button class="btn btn-sm btn-outline-danger asset-news-btn" type="submit">Clear news</button>
-                                </form> {% endcomment %}
+                                </form>
                             </div>
                         </div>
                         {% endfor %}
@@ -120,6 +129,18 @@
             const button = form.querySelector('button[type="submit"]');
             button.disabled = true;
             button.textContent = 'Clearing…';
+        });
+    });
+    document.querySelectorAll('.market-refresh-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            const market = form.dataset.market;
+            if (!window.confirm(`Clear and replace saved news for every asset in ${market}, then generate a new ranking?`)) {
+                event.preventDefault();
+                return;
+            }
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Refreshing market…';
         });
     });
 </script>

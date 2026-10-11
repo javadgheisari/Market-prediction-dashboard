@@ -36,6 +36,90 @@ def clear_asset_news(symbol: str) -> bool:
     return True
 
 
+def refresh_market_news(symbols: list[str] | tuple[str, ...]) -> dict[str, object]:
+    """Replace saved news and rank every asset in one dashboard market.
+
+    Clearing is completed as a separate first phase so a successful crawl can
+    never be merged with stale rows.  An error for one asset is retained in the
+    result instead of preventing recommendations for the rest of the market.
+    """
+    normalized_symbols = list(
+        dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip())
+    )
+    if not normalized_symbols:
+        raise ValueError("The selected market does not contain any assets.")
+
+    results: dict[str, dict[str, object]] = {
+        symbol: {
+            "symbol": symbol,
+            "cleared": False,
+            "fetched": 0,
+            "saved": 0,
+        }
+        for symbol in normalized_symbols
+    }
+
+    # Clear the whole selected market before fetching any replacement data.
+    for symbol in normalized_symbols:
+        try:
+            clear_asset_news(symbol)
+        except OSError as exc:
+            results[symbol]["error"] = f"Could not clear saved news: {exc}"
+        else:
+            results[symbol]["cleared"] = True
+
+    for symbol in normalized_symbols:
+        item = results[symbol]
+        if item.get("error"):
+            continue
+        try:
+            crawl_result = crawl_asset_news(symbol)
+            item.update(
+                {
+                    "fetched": int(crawl_result.get("fetched", 0)),
+                    "saved": int(crawl_result.get("saved", 0)),
+                }
+            )
+            decision = predict_news_buy_decision(symbol)
+        except Exception as exc:
+            # Feed/network/scorer failures are asset-specific; keep ranking the
+            # other symbols and make this failure visible on the result page.
+            item["error"] = str(exc)
+            continue
+
+        item.update(decision)
+        item["ranking_score"] = round(
+            float(decision["signal_score"])
+            * (float(decision["confidence_percent"]) / 100.0),
+            4,
+        )
+
+    ranked = sorted(
+        (item for item in results.values() if "ranking_score" in item),
+        key=lambda item: (
+            -float(item["ranking_score"]),
+            -float(item["signal_score"]),
+            str(item["symbol"]),
+        ),
+    )
+    for rank, item in enumerate(ranked, start=1):
+        item["rank"] = rank
+
+    failed = sorted(
+        (item for item in results.values() if "ranking_score" not in item),
+        key=lambda item: str(item["symbol"]),
+    )
+    recommendations = ranked + failed
+    return {
+        "recommendations": recommendations,
+        "asset_count": len(normalized_symbols),
+        "cleared_count": sum(bool(item["cleared"]) for item in results.values()),
+        "analyzed_count": len(ranked),
+        "buy_count": sum(bool(item.get("should_buy")) for item in ranked),
+        "error_count": len(failed),
+    }
+
+
 def _bounded_number(
     row: dict[str, str], name: str, default: float, lower: float, upper: float
 ) -> float:

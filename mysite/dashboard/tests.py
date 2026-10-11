@@ -21,6 +21,7 @@ from dashboard.news_service import (
     clear_asset_news,
     load_asset_news,
     predict_news_buy_decision,
+    refresh_market_news,
 )
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
@@ -485,6 +486,14 @@ class DashboardViewTests(SimpleTestCase):
             reverse("clear_news", kwargs={"symbol_name": "BTC"}),
         )
         self.assertContains(response, "Clear news")
+        self.assertContains(response, "Refresh news &amp; rank buys", html=True)
+        self.assertContains(
+            response,
+            reverse(
+                "market_recommendations",
+                kwargs={"market_slug": "cryptocurrency"},
+            ),
+        )
         self.assertContains(response, 'class="live-price-indicator"')
         self.assertContains(response, "refreshLatestPrices()")
 
@@ -775,6 +784,76 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertEqual(response.status_code, 405)
 
+    @patch("dashboard.views.list_available_assets")
+    @patch("dashboard.views.news_service.refresh_market_news")
+    def test_market_refresh_renders_ranked_recommendations(
+        self, refresh_news, list_assets
+    ):
+        list_assets.return_value = {"FX majors": ["EUR", "GBP"]}
+        refresh_news.return_value = {
+            "recommendations": [
+                {
+                    "symbol": "EUR",
+                    "cleared": True,
+                    "fetched": 5,
+                    "saved": 5,
+                    "rank": 1,
+                    "ranking_score": 0.432,
+                    "signal_score": 0.72,
+                    "confidence_percent": 60.0,
+                    "articles_analyzed": 4,
+                    "articles_saved": 5,
+                    "decision": "BUY",
+                    "should_buy": True,
+                },
+                {
+                    "symbol": "GBP",
+                    "cleared": True,
+                    "fetched": 0,
+                    "saved": 0,
+                    "error": "No active news signals are available.",
+                },
+            ],
+            "asset_count": 2,
+            "cleared_count": 2,
+            "analyzed_count": 1,
+            "buy_count": 1,
+            "error_count": 1,
+        }
+
+        response = self.client.post(
+            reverse(
+                "market_recommendations",
+                kwargs={"market_slug": "fx-majors"},
+            )
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "FX majors buy ranking")
+        self.assertContains(response, "#1")
+        self.assertContains(response, "EUR")
+        self.assertContains(response, "BUY")
+        self.assertContains(response, "No active news signals are available.")
+        refresh_news.assert_called_once_with(["EUR", "GBP"])
+
+    def test_market_refresh_is_post_only(self):
+        response = self.client.get(
+            reverse(
+                "market_recommendations",
+                kwargs={"market_slug": "cryptocurrency"},
+            )
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_unknown_market_refresh_returns_404(self):
+        response = self.client.post(
+            reverse(
+                "market_recommendations",
+                kwargs={"market_slug": "not-a-market"},
+            )
+        )
+        self.assertEqual(response.status_code, 404)
+
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
     @patch("dashboard.views.news_service.predict_news_buy_decision")
     def test_news_only_model_returns_buy_decision_without_forecast(
@@ -876,6 +955,99 @@ class ChartAdapterTests(SimpleTestCase):
 
 
 class NewsDisplayTests(SimpleTestCase):
+    @patch("dashboard.news_service.predict_news_buy_decision")
+    @patch("dashboard.news_service.crawl_asset_news")
+    @patch("dashboard.news_service.clear_asset_news")
+    def test_market_news_refresh_clears_crawls_and_ranks_by_adjusted_signal(
+        self, clear_news, crawl_news, predict_news
+    ):
+        events = []
+        clear_news.side_effect = lambda symbol: events.append(("clear", symbol))
+
+        def crawl(symbol):
+            events.append(("crawl", symbol))
+            return {"symbol": symbol, "fetched": 3, "saved": 3}
+
+        crawl_news.side_effect = crawl
+        decisions = {
+            "AAA": {
+                "decision": "BUY",
+                "should_buy": True,
+                "signal_score": 0.6,
+                "confidence_percent": 50.0,
+                "articles_analyzed": 3,
+                "articles_saved": 3,
+                "strongest_headline": "AAA rises",
+                "explanation": "Bullish.",
+            },
+            "BBB": {
+                "decision": "BUY",
+                "should_buy": True,
+                "signal_score": 0.5,
+                "confidence_percent": 80.0,
+                "articles_analyzed": 2,
+                "articles_saved": 3,
+                "strongest_headline": "BBB rises",
+                "explanation": "Bullish.",
+            },
+        }
+        predict_news.side_effect = lambda symbol: decisions[symbol]
+
+        result = refresh_market_news(["aaa", "BBB", "AAA"])
+
+        self.assertEqual(
+            [item["symbol"] for item in result["recommendations"]],
+            ["BBB", "AAA"],
+        )
+        self.assertEqual(
+            [item["rank"] for item in result["recommendations"]], [1, 2]
+        )
+        self.assertEqual(result["recommendations"][0]["ranking_score"], 0.4)
+        self.assertEqual(result["asset_count"], 2)
+        self.assertEqual(result["buy_count"], 2)
+        self.assertEqual(clear_news.call_count, 2)
+        self.assertEqual(crawl_news.call_count, 2)
+        self.assertEqual(
+            events,
+            [
+                ("clear", "AAA"),
+                ("clear", "BBB"),
+                ("crawl", "AAA"),
+                ("crawl", "BBB"),
+            ],
+        )
+
+    @patch("dashboard.news_service.predict_news_buy_decision")
+    @patch("dashboard.news_service.crawl_asset_news")
+    @patch("dashboard.news_service.clear_asset_news")
+    def test_market_news_refresh_keeps_other_assets_when_one_crawl_fails(
+        self, clear_news, crawl_news, predict_news
+    ):
+        def crawl(symbol):
+            if symbol == "BAD":
+                raise RuntimeError("Feed unavailable")
+            return {"symbol": symbol, "fetched": 2, "saved": 2}
+
+        crawl_news.side_effect = crawl
+        predict_news.return_value = {
+            "decision": "DO NOT BUY",
+            "should_buy": False,
+            "signal_score": -0.2,
+            "confidence_percent": 50.0,
+            "articles_analyzed": 2,
+            "articles_saved": 2,
+            "strongest_headline": "A decline",
+            "explanation": "Bearish.",
+        }
+
+        result = refresh_market_news(["GOOD", "BAD"])
+
+        self.assertEqual(result["analyzed_count"], 1)
+        self.assertEqual(result["error_count"], 1)
+        self.assertEqual(result["recommendations"][0]["symbol"], "GOOD")
+        self.assertEqual(result["recommendations"][1]["error"], "Feed unavailable")
+        predict_news.assert_called_once_with("GOOD")
+
     def test_news_only_model_buys_on_strong_consistent_recent_signals(self):
         with tempfile.TemporaryDirectory() as directory:
             news_dir = Path(directory) / "news"

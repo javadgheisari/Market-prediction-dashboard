@@ -292,9 +292,12 @@ with newer BiQuote candles; other assets use BiQuote's recent H1 history.
 
 Use **Crawl news** beside an asset, or on its forecast page, to fetch the latest
 seven days of relevant RSS headlines into `data/news/<SYMBOL>_news.csv`. Existing
-rows are retained and deduplicated. A later training run automatically includes
-that news file when **Price + crawled news** is selected and its dates overlap
-the market dataset. Select **Price data only** to train while ignoring news.
+rows are retained and deduplicated. Use **Refresh news & rank buys** on a market
+card to clear the saved news for every asset in that market, crawl fresh
+headlines, and open a confidence-adjusted ranking of the resulting news-only buy
+signals. A later training run automatically includes that news file when
+**Price + crawled news** is selected and its dates overlap the market dataset.
+Select **Price data only** to train while ignoring news.
 Each asset page lists saved headlines with publication time, source, link, and
 the crawler's asset-impact score. Pagination provides access to the complete
 saved history, 25 articles at a time.

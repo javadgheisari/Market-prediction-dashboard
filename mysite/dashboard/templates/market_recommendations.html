@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<main class="container py-4 py-lg-5">
+    <a class="back-link mb-4" href="{% url 'dashboard' %}">&larr; All markets</a>
+
+    <div class="recommendations-hero mb-4">
+        <div>
+            <div class="page-eyebrow">Fresh market analysis</div>
+            <h1 class="hero-title mb-2">{{ market_name }} buy ranking</h1>
+            <p class="hero-copy text-white-50 mx-0">
+                Previous saved headlines were cleared, current news was crawled, and each asset was ranked by its confidence-adjusted news signal.
+            </p>
+        </div>
+        <form class="market-refresh-form" method="post" action="{{ request.path }}" data-market="{{ market_name }}">
+            {% csrf_token %}
+            <button class="btn btn-info" type="submit">Refresh ranking again</button>
+        </form>
+    </div>
+
+    <div class="row g-3 mb-4" aria-label="Refresh summary">
+        <div class="col-6 col-lg-3"><div class="metric-card"><span class="metric-label">Market assets</span><span class="metric-value">{{ asset_count }}</span></div></div>
+        <div class="col-6 col-lg-3"><div class="metric-card"><span class="metric-label">Successfully ranked</span><span class="metric-value">{{ analyzed_count }}</span></div></div>
+        <div class="col-6 col-lg-3"><div class="metric-card"><span class="metric-label">Buy signals</span><span class="metric-value text-success">{{ buy_count }}</span></div></div>
+        <div class="col-6 col-lg-3"><div class="metric-card"><span class="metric-label">Assets with errors</span><span class="metric-value {% if error_count %}text-warning{% endif %}">{{ error_count }}</span></div></div>
+    </div>
+
+    <section class="app-card recommendations-card">
+        <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div>
+                <h2 class="h5 mb-1">News-based recommendations</h2>
+                <small class="text-white-50">Ranking score = weighted news signal × model confidence. Negative scores rank below positive scores.</small>
+            </div>
+            <span class="asset-count">{{ cleared_count }} news files reset</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-dark table-hover align-middle mb-0 recommendations-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Rank</th>
+                        <th scope="col">Asset</th>
+                        <th scope="col">Recommendation</th>
+                        <th scope="col">Ranking score</th>
+                        <th scope="col">News signal</th>
+                        <th scope="col">Confidence</th>
+                        <th scope="col">Active / saved</th>
+                        <th scope="col">Crawl result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in recommendations %}
+                    <tr{% if item.error %} class="recommendation-error-row"{% endif %}>
+                        <td>{% if item.rank %}<span class="rank-pill">#{{ item.rank }}</span>{% else %}&mdash;{% endif %}</td>
+                        <td><a class="link-light fw-bold" href="{% url 'predict' symbol_name=item.symbol %}">{{ item.symbol }}</a></td>
+                        {% if item.error %}
+                        <td colspan="5"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
+                        <td>{{ item.fetched }} fetched</td>
+                        {% else %}
+                        <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span></td>
+                        <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>
+                        <td class="{% if item.signal_score > 0 %}text-success{% elif item.signal_score < 0 %}text-danger{% endif %}">{{ item.signal_score|floatformat:2 }}</td>
+                        <td>{{ item.confidence_percent|floatformat:1 }}%</td>
+                        <td>{{ item.articles_analyzed }} / {{ item.articles_saved }}</td>
+                        <td>{{ item.fetched }} fetched</td>
+                        {% endif %}
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="8" class="text-center text-white-50 py-5">No assets were available to rank.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <div class="alert alert-warning mt-4 mb-0" role="note">
+        Experimental news signal only—not financial advice. Rankings do not consider price, valuation, liquidity, portfolio risk, transaction costs, or your circumstances.
+    </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll('.market-refresh-form').forEach(function (form) {
+        form.addEventListener('submit', function (event) {
+            if (!window.confirm(`Clear and replace saved news for every asset in ${form.dataset.market}, then generate a new ranking?`)) {
+                event.preventDefault();
+                return;
+            }
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Refreshing market…';
+        });
+    });
+</script>
+{% endblock %}

@@ -7,6 +7,7 @@ from django.contrib import messages
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.utils.text import slugify
 from django.views import View
 
 from dashboard import forecaster, forexsb_service, market_data_service, news_service
@@ -209,6 +210,36 @@ class NewsClearView(View):
             else:
                 messages.info(request, f"There was no saved news to clear for {symbol}.")
         return redirect("predict", symbol_name=symbol)
+
+
+class MarketRecommendationsView(View):
+    template_name = "market_recommendations.html"
+
+    def get_market(self, market_slug):
+        for market_name, symbols in list_available_assets().items():
+            if slugify(market_name) == market_slug:
+                return market_name, symbols
+        raise Http404("Unknown dashboard market.")
+
+    def post(self, request, market_slug):
+        market_name, symbols = self.get_market(market_slug)
+        try:
+            result = news_service.refresh_market_news(symbols)
+        except (OSError, RuntimeError, ValueError) as exc:
+            messages.error(
+                request,
+                f"Could not refresh news for {market_name}: {exc}",
+            )
+            return redirect("dashboard")
+
+        return render(
+            request,
+            self.template_name,
+            {
+                "market_name": market_name,
+                **result,
+            },
+        )
 
 
 class PriceCsvDownloadView(View):
