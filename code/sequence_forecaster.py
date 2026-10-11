@@ -488,11 +488,94 @@ def build_news_features(
     )
 
 
+def load_context_features(
+    path: Path, market_dates: pd.Series
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Causally align provider-neutral context observations to price candles."""
+    raw = pd.read_csv(path)
+    required = {"available_at", "feature", "value"}
+    missing = required.difference(raw.columns)
+    if missing:
+        raise ValueError(
+            f"Market context CSV is missing {sorted(missing)}. "
+            f"Available columns: {list(raw.columns)}"
+        )
+    raw = raw.copy()
+    raw["available_at"] = align_news_timezone(
+        parse_datetimes(raw["available_at"]), market_dates
+    )
+    raw["feature"] = raw["feature"].astype("string").str.strip().str.lower()
+    raw = raw[
+        raw["feature"].str.fullmatch(r"[a-z][a-z0-9_]{1,79}", na=False)
+    ]
+    raw["value"] = pd.to_numeric(raw["value"], errors="coerce")
+    raw["max_age_hours"] = pd.to_numeric(
+        raw.get("max_age_hours", pd.Series(168.0, index=raw.index)),
+        errors="coerce",
+    ).fillna(168.0).clip(1.0, 24.0 * 366)
+    raw = raw.dropna(subset=["available_at", "value"])
+    raw = raw.sort_values("available_at").drop_duplicates(
+        subset=["available_at", "feature"], keep="last"
+    )
+    if raw.empty:
+        raise ValueError("The market context CSV contains no valid observations.")
+
+    market = pd.DataFrame(
+        {"market_at": market_dates, "market_order": np.arange(len(market_dates))}
+    ).sort_values("market_at")
+    features = pd.DataFrame(index=market_dates.index)
+    coverage: dict[str, float] = {}
+    for feature_name, observations in raw.groupby("feature", sort=True):
+        right = observations[
+            ["available_at", "value", "max_age_hours"]
+        ].sort_values("available_at")
+        aligned = pd.merge_asof(
+            market,
+            right,
+            left_on="market_at",
+            right_on="available_at",
+            direction="backward",
+            allow_exact_matches=True,
+        ).sort_values("market_order")
+        ages = (
+            aligned["market_at"] - aligned["available_at"]
+        ).dt.total_seconds() / 3600.0
+        valid = ages.ge(0) & ages.le(aligned["max_age_hours"])
+        values = aligned["value"].where(valid)
+        coverage[str(feature_name)] = float(values.notna().mean() * 100)
+
+        # Signed log levels keep market caps and volumes numerically tame while
+        # preserving negative rates and spreads. Changes and rolling z-scores
+        # add stationary versions that are generally more predictive.
+        level = np.sign(values) * np.log1p(values.abs())
+        level.index = market_dates.index
+        prefix = f"context_{feature_name}"
+        features[f"{prefix}_level"] = level
+        features[f"{prefix}_change"] = level.diff()
+        rolling = level.rolling(60, min_periods=5)
+        features[f"{prefix}_zscore_60"] = (
+            (level - rolling.mean()) / rolling.std().replace(0, np.nan)
+        )
+
+    metadata = {
+        "path": str(path),
+        "rows_loaded": len(raw),
+        "source_count": int(raw.get("source", pd.Series(dtype=str)).nunique()),
+        "features": sorted(str(value) for value in raw["feature"].unique()),
+        "coverage_percent": coverage,
+        "overall_coverage_percent": float(
+            np.mean(features.notna().any(axis=1)) * 100
+        ),
+    }
+    return features.replace([np.inf, -np.inf], np.nan).fillna(0.0), metadata
+
+
 def build_features(
     df: pd.DataFrame,
     date_col: str,
     close_col: str,
     news_features: pd.DataFrame | None = None,
+    context_features: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Create causal features; every row uses only that candle and earlier data."""
     close = df[close_col].astype(float)
@@ -568,6 +651,8 @@ def build_features(
 
     if news_features is not None:
         features = features.join(news_features)
+    if context_features is not None:
+        features = features.join(context_features)
 
     return features.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
@@ -1016,6 +1101,7 @@ def train_and_forecast(
     close_col: str,
     config: ForecastConfig,
     news_csv_path: Path | None = None,
+    context_csv_path: Path | None = None,
     news_date_col: str | None = None,
     news_impact_col: str | None = None,
     interval_minutes: float | None = None,
@@ -1066,7 +1152,19 @@ def train_and_forecast(
             f"Loaded {len(news)} news rows using "
             f"{news_metadata['scoring_method']} scoring"
         )
-    features = build_features(df, date_col, close_col, news_features)
+    context_metadata: dict[str, Any] | None = None
+    context_features: pd.DataFrame | None = None
+    if context_csv_path is not None:
+        context_features, context_metadata = load_context_features(
+            context_csv_path, df[date_col]
+        )
+        if context_metadata["overall_coverage_percent"] == 0:
+            raise ValueError(
+                "No market intelligence overlaps the selected price history."
+            )
+    features = build_features(
+        df, date_col, close_col, news_features, context_features
+    )
     close = df[close_col].to_numpy(dtype=np.float64)
     log_returns = np.diff(np.log(close), prepend=np.log(close[0])).reshape(-1, 1)
 
@@ -1092,6 +1190,21 @@ def train_and_forecast(
             raise ValueError(
                 "News does not overlap the training partition. Provide historical "
                 "news covering the price-training period."
+            )
+    if context_features is not None and context_metadata is not None:
+        training_context_coverage = float(
+            np.mean(
+                context_features.iloc[:validation_start].abs().sum(axis=1) > 0
+            )
+            * 100
+        )
+        context_metadata[
+            "training_feature_coverage_percent"
+        ] = training_context_coverage
+        if training_context_coverage == 0:
+            raise ValueError(
+                "Market intelligence does not overlap the training partition. "
+                "Collect a longer history or train without market intelligence."
             )
 
     # Fit preprocessing only on the sub-training partition. Validation and test
@@ -1216,6 +1329,7 @@ def train_and_forecast(
         "validation_samples": len(x_validation),
         "test_samples": len(actual_test),
         "news": news_metadata,
+        "context": context_metadata,
         "best_epoch": int(np.argmin(history.history["val_loss"]) + 1),
         "prediction_return_bounds": list(return_bounds),
         "validation_selected_return_scale": return_scale,
@@ -1318,6 +1432,11 @@ def build_argument_parser(kind: ModelKind) -> argparse.ArgumentParser:
         type=Path,
         help="Optional asset news CSV; cancel the second dialog to train without news",
     )
+    parser.add_argument(
+        "--context-csv",
+        type=Path,
+        help="Optional timestamped market-intelligence CSV",
+    )
     parser.add_argument("--date-col", default="Asia/Tehran")
     parser.add_argument("--close-col", default="Close")
     parser.add_argument(
@@ -1381,6 +1500,10 @@ def main(kind: ModelKind) -> None:
         raise FileNotFoundError(f"Price CSV file does not exist: {csv_path}")
     if news_csv_path is not None and not news_csv_path.is_file():
         raise FileNotFoundError(f"News CSV file does not exist: {news_csv_path}")
+    if args.context_csv is not None and not args.context_csv.is_file():
+        raise FileNotFoundError(
+            f"Market context CSV file does not exist: {args.context_csv}"
+        )
     config = ForecastConfig(
         window=args.window,
         forecast_steps=args.forecast_steps,
@@ -1403,6 +1526,9 @@ def main(kind: ModelKind) -> None:
         close_col=args.close_col,
         config=config,
         news_csv_path=news_csv_path.resolve() if news_csv_path is not None else None,
+        context_csv_path=(
+            args.context_csv.resolve() if args.context_csv is not None else None
+        ),
         news_date_col=args.news_date_col,
         news_impact_col=args.news_impact_col,
         interval_minutes=args.interval_minutes,

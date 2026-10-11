@@ -486,6 +486,11 @@ class DashboardViewTests(SimpleTestCase):
             reverse("clear_news", kwargs={"symbol_name": "BTC"}),
         )
         self.assertContains(response, "Clear news")
+        self.assertContains(response, "Collect signals")
+        self.assertContains(
+            response,
+            reverse("collect_market_context", kwargs={"symbol_name": "BTC"}),
+        )
         self.assertContains(response, "Refresh news &amp; rank buys", html=True)
         self.assertContains(
             response,
@@ -612,7 +617,7 @@ class DashboardViewTests(SimpleTestCase):
 
         self.assertContains(response, 'id="news-impact-section"')
         self.assertContains(response, 'id="news-impact-chart"')
-        self.assertContains(response, "dataSource.value === 'with_news'")
+        self.assertContains(response, "'with_news_context'")
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
     def test_prediction_post_renders_chart(self, run_forecast):
@@ -659,6 +664,7 @@ class DashboardViewTests(SimpleTestCase):
             price_csv=None,
             price_source="bundled",
             use_news=False,
+            use_context=False,
             advanced_config={
                 "window": 60,
                 "split_ratio": 0.8,
@@ -695,6 +701,7 @@ class DashboardViewTests(SimpleTestCase):
             price_csv=None,
             price_source="bundled",
             use_news=True,
+            use_context=False,
             advanced_config={
                 "window": 60,
                 "split_ratio": 0.8,
@@ -710,6 +717,28 @@ class DashboardViewTests(SimpleTestCase):
                 "chronos_device": "cpu",
             },
         )
+
+    @patch("dashboard.views.has_bundled_data", return_value=True)
+    @patch("dashboard.views.forecaster.run_dashboard_forecast")
+    def test_market_intelligence_selection_reaches_forecaster(
+        self, run_forecast, _has_bundled_data
+    ):
+        run_forecast.side_effect = ValueError("Stop after checking inputs")
+
+        response = self.client.post(
+            reverse("predict", kwargs={"symbol_name": "BTC"}),
+            {
+                "model_name": "xgboost",
+                "data_source": "with_news_context",
+                "price_source": "bundled",
+                "predict_steps": 24,
+            },
+        )
+
+        self.assertContains(response, "Stop after checking inputs")
+        kwargs = run_forecast.call_args.kwargs
+        self.assertTrue(kwargs["use_news"])
+        self.assertTrue(kwargs["use_context"])
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
     def test_uploaded_historical_csv_is_used_temporarily(self, run_forecast):
@@ -781,6 +810,34 @@ class DashboardViewTests(SimpleTestCase):
     def test_clear_news_is_post_only(self):
         response = self.client.get(
             reverse("clear_news", kwargs={"symbol_name": "BTC"})
+        )
+        self.assertEqual(response.status_code, 405)
+
+    @patch("dashboard.views.market_context_service.collect_asset_context")
+    def test_collect_market_context_updates_one_asset(self, collect_context):
+        collect_context.return_value = {
+            "symbol": "BTC",
+            "fetched": 30,
+            "saved": 120,
+            "sources": {"binance": 20, "coingecko": 10},
+            "errors": {},
+            "path": Path("data/context/BTC_context.csv"),
+        }
+
+        response = self.client.post(
+            reverse("collect_market_context", kwargs={"symbol_name": "BTC"}),
+            follow=True,
+        )
+
+        self.assertRedirects(
+            response, reverse("predict", kwargs={"symbol_name": "BTC"})
+        )
+        self.assertContains(response, "30 new observations from 2 sources")
+        collect_context.assert_called_once_with("BTC")
+
+    def test_collect_market_context_is_post_only(self):
+        response = self.client.get(
+            reverse("collect_market_context", kwargs={"symbol_name": "BTC"})
         )
         self.assertEqual(response.status_code, 405)
 
@@ -907,6 +964,7 @@ class ChartAdapterTests(SimpleTestCase):
         )
         self.assertEqual(result["metrics"]["bullish_percent"], 70.0)
         self.assertFalse(result["metrics"]["news_enabled"])
+        self.assertFalse(result["metrics"]["context_enabled"])
         self.assertTrue(result["metrics"]["forecast_is_naive"])
 
     def test_chart_dates_are_displayed_in_tehran_time(self):

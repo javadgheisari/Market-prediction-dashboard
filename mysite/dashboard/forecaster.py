@@ -70,6 +70,11 @@ def resolve_news_csv(symbol: str) -> Path | None:
     return next((path for path in candidates if path.is_file()), None)
 
 
+def resolve_context_csv(symbol: str) -> Path | None:
+    path = DATA_DIR / "context" / f"{symbol.upper()}_context.csv"
+    return path if path.is_file() else None
+
+
 @contextmanager
 def news_overlapping_price_csv(price_csv: Path, news_csv: Path):
     """Yield news-overlapping prices with pre-news model context.
@@ -139,6 +144,7 @@ def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
                 "bearish_percent"
             ],
             "news_enabled": metrics["news"] is not None,
+            "context_enabled": metrics.get("context") is not None,
             "forecast_is_naive": all(scale == 0 for scale in return_scales),
         },
     }
@@ -150,6 +156,7 @@ def run_dashboard_forecast(
     predict_steps: int,
     price_csv: Path | None,
     use_news: bool,
+    use_context: bool = False,
     price_source: str = "bundled",
     advanced_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -162,10 +169,16 @@ def run_dashboard_forecast(
     else:
         source_context = nullcontext(price_csv or resolve_data_csv(symbol))
     news_csv = resolve_news_csv(symbol) if use_news else None
+    context_csv = resolve_context_csv(symbol) if use_context else None
     if use_news and news_csv is None:
         raise FileNotFoundError(
             f"No crawled news file exists for {symbol}. Click 'Crawl latest "
             f"{symbol} news' first, then train again with news."
+        )
+    if use_context and context_csv is None:
+        raise FileNotFoundError(
+            f"No market intelligence file exists for {symbol}. Click 'Collect "
+            "market intelligence' first, then train again."
         )
     with source_context as source_price_csv:
         with refreshed_price_csv(source_price_csv, symbol) as normalized_price_csv:
@@ -180,6 +193,7 @@ def run_dashboard_forecast(
                     training_price_csv=training_price_csv,
                     predict_steps=predict_steps,
                     news_csv=news_csv,
+                    context_csv=context_csv,
                     advanced_config=advanced_config or {},
                 )
     return build_plotly_chart(metrics)
@@ -190,6 +204,7 @@ def _train_model(
     training_price_csv: Path,
     predict_steps: int,
     news_csv: Path | None,
+    context_csv: Path | None,
     advanced_config: dict[str, Any],
 ) -> dict[str, Any]:
     """Run a model against an already downloaded and refreshed price file."""
@@ -202,6 +217,7 @@ def _train_model(
             close_col="Close",
             forecast_steps=predict_steps,
             news_csv_path=news_csv,
+            context_csv_path=context_csv,
             window=int(advanced_config.get("window", 60)),
             split_ratio=float(advanced_config.get("split_ratio", 0.8)),
             validation_ratio=float(advanced_config.get("validation_ratio", 0.2)),
@@ -222,6 +238,7 @@ def _train_model(
             close_col="Close",
             forecast_steps=predict_steps,
             news_csv_path=news_csv,
+            context_csv_path=context_csv,
             split_ratio=float(advanced_config.get("split_ratio", 0.8)),
             context_length=int(
                 advanced_config.get("chronos_context_length", 512)
@@ -254,6 +271,7 @@ def _train_model(
             close_col="Close",
             config=config,
             news_csv_path=news_csv,
+            context_csv_path=context_csv,
             show_plot=False,
             save_plots=False,
         )

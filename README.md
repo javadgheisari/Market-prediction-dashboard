@@ -106,6 +106,66 @@ horizon, then returns either `BUY` or `DO NOT BUY`. A buy requires both a
 positive weighted signal and sufficient consistent evidence. This output is an
 experimental research signal, not financial advice.
 
+### Market-intelligence context
+
+The dashboard can collect and train on timestamped external context in addition
+to price and news. Click **Collect signals** beside an asset, or **Collect market
+intelligence** on its forecast page. Then choose **Price + market intelligence**
+or **Price + news + market intelligence** as the training data source.
+
+Collected observations use a provider-neutral long format under
+`data/context/<SYMBOL>_context.csv`:
+
+```csv
+available_at,feature,value,source,max_age_hours
+2026-10-10T08:00:00+00:00,funding_rate,0.0001,binance_futures,12
+```
+
+`available_at` is the earliest time the value could have been known. During
+training each value is joined backward to price candles and expires after
+`max_age_hours`; it is never joined to an earlier candle. The feature pipeline
+adds a signed-log level, a one-step change, and a rolling z-score for every
+context series.
+
+The collector currently supports:
+
+- CoinGecko historical price, market cap, volume, supply, rank, developer,
+  attention, BTC benchmark, dominance, top-250 breadth/concentration, and
+  global-market snapshots;
+- Binance hourly spot trade flow, order-book depth/imbalance, spread, futures
+  funding, basis, open interest, taker flow, and long/short positioning;
+- DefiLlama protocol and chain TVL plus global stablecoin supply;
+- CFTC weekly futures positioning for configured FX, crypto, metal, and oil
+  markets;
+- SEC filing events and point-in-time XBRL fundamentals for configured US
+  equities; and
+- optional point-in-time FRED/ALFRED initial-release macro data, EIA petroleum,
+  and Glassnode on-chain/derivatives/options history when their API keys are
+  configured.
+
+Optional keys are read only from environment variables:
+
+```bash
+export FRED_API_KEY="..."
+export EIA_API_KEY="..."
+export GLASSNODE_API_KEY="..."
+export SEC_USER_AGENT="MarketPredictionDashboard your-email@example.com"
+```
+
+CoinGecko, Binance, DefiLlama, CFTC, and SEC collection does not require a key;
+the SEC does require an identifying user-agent with a real contact address.
+Provider mappings and enabled series are defined in
+`config/market_context.json`. Collection is additive and deduplicated, so
+running it regularly builds history for snapshot-only metrics such as order-book
+depth and global dominance. Some Binance derivatives endpoints retain only a
+short history; begin archiving them early.
+
+The same collector is available from the command line:
+
+```bash
+python code/market_context.py --assets BTC ETH EUR XAU USOIL AAPL
+```
+
 See [`data/news/gold_news_sample.csv`](data/news/gold_news_sample.csv) for a
 complete example. Its dates must be adjusted or paired with market data from
 the same period before training.

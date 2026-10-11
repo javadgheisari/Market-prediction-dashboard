@@ -123,6 +123,28 @@ class NewsFeatureTests(unittest.TestCase):
             features.iloc[3]["news_attention_weight"],
         )
 
+    def test_market_context_is_joined_only_after_it_became_available(self):
+        dates = pd.Series(pd.date_range("2026-01-01", periods=5, freq="h", tz="UTC"))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "BTC_context.csv"
+            pd.DataFrame(
+                {
+                    "available_at": [dates.iloc[2].isoformat()],
+                    "feature": ["funding_rate"],
+                    "value": [0.01],
+                    "source": ["test"],
+                    "max_age_hours": [2],
+                }
+            ).to_csv(path, index=False)
+            features, metadata = self.forecaster.load_context_features(path, dates)
+
+        level = features["context_funding_rate_level"]
+        self.assertEqual(level.iloc[0], 0.0)
+        self.assertEqual(level.iloc[1], 0.0)
+        self.assertGreater(level.iloc[2], 0.0)
+        self.assertGreater(level.iloc[4], 0.0)
+        self.assertGreater(metadata["overall_coverage_percent"], 0.0)
+
 
 class ChronosDashboardTests(unittest.TestCase):
     @classmethod

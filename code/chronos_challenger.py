@@ -16,6 +16,7 @@ from sequence_forecaster import (
     extract_asset_symbol,
     infer_interval,
     load_market_data,
+    load_context_features,
     load_news_data,
     make_future_dates,
 )
@@ -129,6 +130,7 @@ def train_and_forecast_chronos(
     close_col: str = "Close",
     forecast_steps: int = 24,
     news_csv_path: Path | None = None,
+    context_csv_path: Path | None = None,
     *,
     split_ratio: float = 0.8,
     context_length: int = 512,
@@ -168,12 +170,29 @@ def train_and_forecast_chronos(
             np.mean(news_features.abs().sum(axis=1) > 0) * 100
         )
 
+    context_metadata = None
+    context_features = None
+    if context_csv_path is not None:
+        context_features, context_metadata = load_context_features(
+            context_csv_path, dates
+        )
+    all_covariates = None
+    if news_features is not None or context_features is not None:
+        all_covariates = pd.concat(
+            [
+                frame
+                for frame in (news_features, context_features)
+                if frame is not None
+            ],
+            axis=1,
+        )
+
     loaded_pipeline = pipeline or _load_pipeline(model_id, device_map)
     item_id = csv_path.stem
     context_start = max(0, split_index - context_length)
     context_covariates = (
-        news_features.iloc[context_start:split_index]
-        if news_features is not None
+        all_covariates.iloc[context_start:split_index]
+        if all_covariates is not None
         else None
     )
     test_context = _chronos_frame(
@@ -187,9 +206,9 @@ def train_and_forecast_chronos(
     # future news covariates are zero. This keeps the evaluation causal.
     test_covariates = (
         pd.DataFrame(
-            0.0, index=range(evaluation_steps), columns=news_features.columns
+            0.0, index=range(evaluation_steps), columns=all_covariates.columns
         )
-        if news_features is not None
+        if all_covariates is not None
         else None
     )
     test_future = _chronos_frame(test_dates, None, item_id, test_covariates)
@@ -218,7 +237,8 @@ def train_and_forecast_chronos(
     future_dates = make_future_dates(dates, forecast_steps, interval)
     full_context_start = max(0, len(market) - context_length)
     full_covariates = (
-        news_features.iloc[full_context_start:] if news_features is not None else None
+        all_covariates.iloc[full_context_start:]
+        if all_covariates is not None else None
     )
     full_context = _chronos_frame(
         dates.iloc[full_context_start:],
@@ -227,8 +247,8 @@ def train_and_forecast_chronos(
         full_covariates,
     )
     future_covariates = (
-        pd.DataFrame(0.0, index=range(forecast_steps), columns=news_features.columns)
-        if news_features is not None
+        pd.DataFrame(0.0, index=range(forecast_steps), columns=all_covariates.columns)
+        if all_covariates is not None
         else None
     )
     future_frame = _chronos_frame(
@@ -248,6 +268,7 @@ def train_and_forecast_chronos(
         "test_samples": evaluation_steps,
         "context_length": context_length,
         "news": news_metadata,
+        "context": context_metadata,
         "validation_selected_return_scale": 1.0,
         "validation_selected_return_scales": [1.0] * forecast_steps,
         "model_metrics": model_metrics,
@@ -310,6 +331,8 @@ def evaluate_chronos(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("price_csv", type=Path)
+    parser.add_argument("--news-csv", type=Path)
+    parser.add_argument("--context-csv", type=Path)
     parser.add_argument("--date-col", required=True)
     parser.add_argument("--close-col", default="Close")
     parser.add_argument("--forecast-steps", type=int, default=24)
@@ -323,6 +346,8 @@ def main() -> None:
         args.date_col,
         args.close_col,
         args.forecast_steps,
+        news_csv_path=args.news_csv,
+        context_csv_path=args.context_csv,
         split_ratio=args.split_ratio,
         context_length=args.context_length,
         model_id=args.model_id,

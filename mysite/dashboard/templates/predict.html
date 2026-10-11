@@ -61,6 +61,17 @@
                         {% csrf_token %}
                         <button class="btn btn-outline-info w-100" type="submit">Crawl latest {{ symbol_name }} news</button>
                     </form>
+                    <form class="context-collect-form mt-2" method="post" action="{% url 'collect_market_context' symbol_name=symbol_name %}">
+                        {% csrf_token %}
+                        <button class="btn btn-outline-info w-100" type="submit">Collect market intelligence</button>
+                    </form>
+                    <p class="small text-white-50 mt-2 mb-0">
+                        {% if context_status.available %}
+                        {{ context_status.rows }} context observations saved from {{ context_status.sources|length }} source{{ context_status.sources|length|pluralize }}.
+                        {% else %}
+                        No derivatives, macro, on-chain, DeFi, or filing context has been saved yet.
+                        {% endif %}
+                    </p>
                     <p class="small text-white-50 mt-3 mb-0 text-center" id="forecast-runtime-note">Training runs live and may take several minutes on a CPU.</p>
                 </div>
             </div>
@@ -98,9 +109,12 @@
                 <span class="badge bg-secondary">Project /data CSV</span>
                 {% endif %}
                 {% if chart_data.metrics.news_enabled %}
-                <span class="badge bg-info text-dark">Price + news</span>
+                <span class="badge bg-info text-dark">News signals</span>
                 {% else %}
-                <span class="badge bg-secondary">Price only</span>
+                <span class="badge bg-secondary">No news</span>
+                {% endif %}
+                {% if chart_data.metrics.context_enabled %}
+                <span class="badge bg-info text-dark">Market intelligence</span>
                 {% endif %}
                 </div>
             </div>
@@ -325,7 +339,7 @@
 
     function updateNewsImpactVisibility() {
         if (!newsImpactSection) return;
-        const showNewsImpact = dataSource.value === 'with_news' || modelSelect.value === 'news_buy';
+        const showNewsImpact = ['with_news', 'with_news_context'].includes(dataSource.value) || modelSelect.value === 'news_buy';
         newsImpactSection.hidden = !showNewsImpact;
         if (showNewsImpact) {
             renderNewsImpactChart();
@@ -365,6 +379,13 @@
             const button = form.querySelector('button[type="submit"]');
             button.disabled = true;
             button.textContent = 'Clearing…';
+        });
+    });
+    document.querySelectorAll('.context-collect-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Collecting intelligence…';
         });
     });
 </script>

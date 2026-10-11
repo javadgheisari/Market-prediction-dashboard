@@ -24,6 +24,7 @@ from sequence_forecaster import (
     extract_asset_symbol,
     infer_interval,
     load_market_data,
+    load_context_features,
     load_news_data,
     make_future_dates,
     make_sequences,
@@ -151,6 +152,7 @@ def train_and_forecast_xgboost(
     close_col: str = "Close",
     forecast_steps: int = 24,
     news_csv_path: Path | None = None,
+    context_csv_path: Path | None = None,
     *,
     window: int = 60,
     split_ratio: float = 0.80,
@@ -208,7 +210,20 @@ def train_and_forecast_xgboost(
                 "Use matching historical news or train with price data only."
             )
 
-    features = build_features(df, date_col, close_col, news_features)
+    context_metadata = None
+    context_features = None
+    if context_csv_path is not None:
+        context_features, context_metadata = load_context_features(
+            context_csv_path, dates
+        )
+        if context_metadata["overall_coverage_percent"] == 0:
+            raise ValueError(
+                "No market intelligence overlaps the selected price history."
+            )
+
+    features = build_features(
+        df, date_col, close_col, news_features, context_features
+    )
     feature_values = features.to_numpy(dtype=np.float32)
     close = df[close_col].to_numpy(dtype=np.float64)
     log_returns = np.diff(np.log(close), prepend=np.log(close[0])).reshape(-1, 1)
@@ -230,6 +245,19 @@ def train_and_forecast_xgboost(
             raise ValueError(
                 "News does not overlap the training partition. Provide historical "
                 "news covering the price-training period."
+            )
+    if context_features is not None and context_metadata is not None:
+        training_coverage = float(
+            np.mean(
+                context_features.iloc[:validation_start].abs().sum(axis=1) > 0
+            )
+            * 100
+        )
+        context_metadata["training_feature_coverage_percent"] = training_coverage
+        if training_coverage == 0:
+            raise ValueError(
+                "Market intelligence does not overlap the training partition. "
+                "Collect a longer history or train without market intelligence."
             )
 
     return_bounds = estimate_return_bounds(log_returns[1:validation_start])
@@ -369,6 +397,7 @@ def train_and_forecast_xgboost(
         "validation_samples": len(x_validation),
         "test_samples": len(actual_test),
         "news": news_metadata,
+        "context": context_metadata,
         "portfolio": {
             "members": member_metadata,
             "horizon_selection": horizon_selection,
@@ -438,6 +467,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("price_csv", type=Path)
     parser.add_argument("news_csv", nargs="?", type=Path)
+    parser.add_argument("--context-csv", type=Path)
     parser.add_argument("--date-col", default="Asia/Tehran")
     parser.add_argument("--close-col", default="Close")
     parser.add_argument("--window", type=int, default=60)
@@ -461,6 +491,7 @@ def main() -> None:
         args.close_col,
         args.forecast_steps,
         args.news_csv,
+        args.context_csv,
         window=args.window,
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,

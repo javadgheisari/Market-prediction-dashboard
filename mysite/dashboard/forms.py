@@ -26,6 +26,8 @@ ADVANCED_CONFIG_FIELDS = (
 DATA_SOURCE_CHOICES = (
     ("price_only", "Price data only"),
     ("with_news", "Price + crawled news"),
+    ("with_context", "Price + market intelligence"),
+    ("with_news_context", "Price + news + market intelligence"),
 )
 
 PRICE_SOURCE_CHOICES = (
@@ -49,8 +51,8 @@ class NameForm(forms.Form):
         initial="price_only",
         widget=forms.Select(attrs={"class": "form-select"}),
         help_text=(
-            "Crawl news first. Price + crawled news automatically uses prices "
-            "from the first saved article onward."
+            "Collect news or market intelligence first. News-enabled training "
+            "automatically uses prices from the first saved article onward."
         ),
     )
     price_source = forms.ChoiceField(

@@ -43,6 +43,10 @@
                                     {% csrf_token %}
                                     <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Crawl news</button>
                                 </form>
+                                <form class="context-collect-form" method="post" action="{% url 'collect_market_context' symbol_name=symbol %}">
+                                    {% csrf_token %}
+                                    <button class="btn btn-sm btn-outline-info asset-news-btn" type="submit">Collect signals</button>
+                                </form>
                                 <form class="news-clear-form" method="post" action="{% url 'clear_news' symbol_name=symbol %}" data-symbol="{{ symbol }}">
                                     {% csrf_token %}
                                     <button class="btn btn-sm btn-outline-danger asset-news-btn" type="submit">Clear news</button>
@@ -129,6 +133,13 @@
             const button = form.querySelector('button[type="submit"]');
             button.disabled = true;
             button.textContent = 'Clearing…';
+        });
+    });
+    document.querySelectorAll('.context-collect-form').forEach(function (form) {
+        form.addEventListener('submit', function () {
+            const button = form.querySelector('button[type="submit"]');
+            button.disabled = true;
+            button.textContent = 'Collecting…';
         });
     });
     document.querySelectorAll('.market-refresh-form').forEach(function (form) {

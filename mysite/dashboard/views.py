@@ -10,7 +10,13 @@ from django.shortcuts import render
 from django.utils.text import slugify
 from django.views import View
 
-from dashboard import forecaster, forexsb_service, market_data_service, news_service
+from dashboard import (
+    forecaster,
+    forexsb_service,
+    market_context_service,
+    market_data_service,
+    news_service,
+)
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm
 from dashboard.price_export_service import latest_price_csv
@@ -82,6 +88,7 @@ class PredictView(View):
             "bundled_available": has_bundled_data(symbol),
             "forexsb_available": forexsb_service.supports_symbol(symbol),
             "asset_news": news_service.load_asset_news(symbol, page=news_page),
+            "context_status": market_context_service.load_context_status(symbol),
         }
 
     def get(self, request, symbol_name):
@@ -153,7 +160,8 @@ class PredictView(View):
                         predict_steps=predict_steps,
                         price_csv=price_csv,
                         price_source=form.cleaned_data["price_source"],
-                        use_news=data_source == "with_news",
+                        use_news=data_source in {"with_news", "with_news_context"},
+                        use_context=data_source in {"with_context", "with_news_context"},
                         advanced_config=form.advanced_config(),
                     )
                 context.update(
@@ -209,6 +217,46 @@ class NewsClearView(View):
                 messages.success(request, f"Saved news for {symbol} was cleared.")
             else:
                 messages.info(request, f"There was no saved news to clear for {symbol}.")
+        return redirect("predict", symbol_name=symbol)
+
+
+class MarketContextCollectView(View):
+    def post(self, request, symbol_name):
+        try:
+            symbol = normalize_symbol(symbol_name)
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect("dashboard")
+        if symbol not in available_symbols():
+            raise Http404("Unknown dashboard asset.")
+
+        try:
+            result = market_context_service.collect_asset_context(symbol)
+        except (OSError, RuntimeError, ValueError) as exc:
+            messages.error(
+                request, f"Could not collect market intelligence for {symbol}: {exc}"
+            )
+        else:
+            source_count = len(result["sources"])
+            error_count = len(result["errors"])
+            if result["saved"]:
+                messages.success(
+                    request,
+                    f"{symbol} market intelligence updated: {result['fetched']} new "
+                    f"observations from {source_count} sources; {result['saved']} saved.",
+                )
+            else:
+                messages.warning(
+                    request,
+                    f"No market intelligence was collected for {symbol}. Configure "
+                    "a supported provider or API key and try again.",
+                )
+            if error_count:
+                failed = ", ".join(sorted(result["errors"]))
+                messages.warning(
+                    request,
+                    f"Some {symbol} providers were unavailable: {failed}.",
+                )
         return redirect("predict", symbol_name=symbol)
 
 
