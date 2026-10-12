@@ -10,9 +10,15 @@ from django.shortcuts import render
 from django.utils.text import slugify
 from django.views import View
 
-from dashboard import forecaster, forexsb_service, market_data_service, news_service
+from dashboard import (
+    forecaster,
+    forexsb_service,
+    market_data_service,
+    news_service,
+    recommendation_service,
+)
 from dashboard.data_paths import has_bundled_data, list_available_assets
-from dashboard.forms import NameForm
+from dashboard.forms import NameForm, RecommendationForm
 from dashboard.price_export_service import latest_price_csv
 
 
@@ -240,6 +246,55 @@ class MarketRecommendationsView(View):
                 **result,
             },
         )
+
+
+class GeneralRecommendationsView(View):
+    template_name = "recommendations.html"
+    form_class = RecommendationForm
+
+    def get_asset_groups(self):
+        return list_available_assets()
+
+    def render_page(self, request, form, result=None, market_name=None):
+        return render(
+            request,
+            self.template_name,
+            {
+                "form": form,
+                "result": result,
+                "market_name": market_name,
+                "market_names": form.market_names,
+            },
+        )
+
+    def get(self, request):
+        asset_groups = self.get_asset_groups()
+        market_slug = request.GET.get("market")
+        initial = {}
+        if market_slug == "all-markets" or market_slug in {
+            slugify(name) for name in asset_groups
+        }:
+            initial["market"] = market_slug
+        form = self.form_class(asset_groups=asset_groups, initial=initial)
+        return self.render_page(request, form)
+
+    def post(self, request):
+        form = self.form_class(request.POST, asset_groups=self.get_asset_groups())
+        result = None
+        market_name = None
+        if form.is_valid():
+            market_name = form.selected_market_name()
+            try:
+                result = recommendation_service.rank_buy_recommendations(
+                    form.selected_symbols(),
+                    model_name=form.cleaned_data["model_name"],
+                    predict_steps=form.cleaned_data["predict_steps"],
+                    use_news=form.cleaned_data["use_news"],
+                    refresh_news=form.cleaned_data["refresh_news"],
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                form.add_error(None, str(exc))
+        return self.render_page(request, form, result, market_name)
 
 
 class PriceCsvDownloadView(View):

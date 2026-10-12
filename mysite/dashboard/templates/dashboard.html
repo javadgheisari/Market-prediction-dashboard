@@ -6,6 +6,7 @@
         <div class="page-eyebrow">AI-powered market research</div>
         <h1 class="hero-title">See the market <span class="gradient-text">before it moves.</span></h1>
         <p class="hero-copy text-white-50">Explore price forecasts across currencies, crypto, metals, and stocks using Chronos-2, GRU, LSTM, or a validation-selected XGBoost portfolio.</p>
+        <a class="btn btn-primary mt-4" href="{% url 'recommendations' %}">Build a model + news buy ranking</a>
     </div>
 
     {% if asset_groups %}
@@ -22,10 +23,13 @@
                         <h3 class="h5 mb-0">{{ category }}</h3>
                         <span class="asset-count">{{ symbols|length }} assets</span>
                     </div>
-                    <form class="market-refresh-form" method="post" action="{% url 'market_recommendations' market_slug=category|slugify %}" data-market="{{ category }}">
-                        {% csrf_token %}
-                        <button class="btn btn-sm btn-info market-recommendations-btn" type="submit">Refresh news &amp; rank buys</button>
-                    </form>
+                    <div class="market-ranking-actions">
+                        <a class="btn btn-sm btn-info market-recommendations-btn" href="{% url 'recommendations' %}?market={{ category|slugify }}">Rank with model + news</a>
+                        <form class="market-refresh-form" method="post" action="{% url 'market_recommendations' market_slug=category|slugify %}" data-market="{{ category }}">
+                            {% csrf_token %}
+                            <button class="btn btn-sm btn-outline-info market-recommendations-btn" type="submit">Refresh news &amp; rank buys</button>
+                        </form>
+                    </div>
                 </div>
                 <div class="card-body pt-1">
                     <div class="{% if category == 'Cryptocurrency' %}crypto-asset-grid{% endif %}">

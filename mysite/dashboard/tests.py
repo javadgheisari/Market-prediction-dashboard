@@ -12,10 +12,10 @@ from django.test import SimpleTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
-from dashboard import forexsb_service, market_data_service
+from dashboard import forexsb_service, market_data_service, recommendation_service
 from dashboard import price_export_service
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
-from dashboard.forms import NameForm
+from dashboard.forms import NameForm, RecommendationForm
 from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
 from dashboard.news_service import (
     clear_asset_news,
@@ -319,6 +319,71 @@ class ForecastFormTests(SimpleTestCase):
         )
 
 
+class RecommendationFormTests(SimpleTestCase):
+    asset_groups = {
+        "Cryptocurrency": ["BTC", "ETH"],
+        "FX majors": ["EUR", "GBP"],
+    }
+
+    def test_blank_assets_selects_the_entire_market(self):
+        form = RecommendationForm(
+            {
+                "market": "cryptocurrency",
+                "model_name": "xgboost",
+                "use_news": "on",
+                "predict_steps": 24,
+            },
+            asset_groups=self.asset_groups,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.selected_symbols(), ["BTC", "ETH"])
+        self.assertEqual(form.selected_market_name(), "Cryptocurrency")
+
+    def test_assets_must_belong_to_the_selected_market(self):
+        form = RecommendationForm(
+            {
+                "market": "cryptocurrency",
+                "assets": ["EUR"],
+                "model_name": "xgboost",
+                "predict_steps": 24,
+            },
+            asset_groups=self.asset_groups,
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn("assets", form.errors)
+
+    def test_all_markets_accepts_a_cross_market_asset_selection(self):
+        form = RecommendationForm(
+            {
+                "market": "all-markets",
+                "assets": ["BTC", "EUR"],
+                "model_name": "xgboost",
+                "predict_steps": 24,
+            },
+            asset_groups=self.asset_groups,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.selected_symbols(), ["BTC", "EUR"])
+        self.assertEqual(form.selected_market_name(), "All markets")
+
+    def test_news_only_always_enables_news(self):
+        form = RecommendationForm(
+            {
+                "market": "fx-majors",
+                "model_name": "news_buy",
+                "refresh_news": "on",
+                "predict_steps": 24,
+            },
+            asset_groups=self.asset_groups,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertTrue(form.cleaned_data["use_news"])
+
+
 class NewsPriceOverlapTests(SimpleTestCase):
     def test_prices_keep_pre_news_context(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -496,6 +561,87 @@ class DashboardViewTests(SimpleTestCase):
         )
         self.assertContains(response, 'class="live-price-indicator"')
         self.assertContains(response, "refreshLatestPrices()")
+        self.assertContains(response, "Build a model + news buy ranking")
+        self.assertContains(response, reverse("recommendations"))
+
+    @patch("dashboard.views.list_available_assets")
+    def test_general_recommendations_page_can_be_prefilled_by_market(
+        self, list_assets
+    ):
+        list_assets.return_value = {
+            "Cryptocurrency": ["BTC", "ETH"],
+            "FX majors": ["EUR", "GBP"],
+        }
+
+        response = self.client.get(
+            reverse("recommendations"), {"market": "fx-majors"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Rank potential buys")
+        self.assertContains(response, '<option value="fx-majors" selected>')
+        self.assertContains(response, "XGBoost Portfolio")
+
+    @patch("dashboard.views.recommendation_service.rank_buy_recommendations")
+    @patch("dashboard.views.list_available_assets")
+    def test_general_recommendations_renders_model_ranking(
+        self, list_assets, rank_recommendations
+    ):
+        list_assets.return_value = {"Cryptocurrency": ["BTC", "ETH"]}
+        rank_recommendations.return_value = {
+            "mode": "forecast",
+            "model_name": "xgboost",
+            "model_label": "XGBoost Portfolio (recommended)",
+            "use_news": True,
+            "predict_steps": 12,
+            "asset_count": 1,
+            "refreshed_count": 0,
+            "analyzed_count": 1,
+            "buy_count": 1,
+            "error_count": 0,
+            "recommendations": [
+                {
+                    "symbol": "BTC",
+                    "rank": 1,
+                    "decision": "BUY",
+                    "should_buy": True,
+                    "ranking_score": 3.25,
+                    "expected_return_percent": 5.0,
+                    "bullish_percent": 70.0,
+                    "confidence_percent": 65.0,
+                    "directional_accuracy_percent": 55.0,
+                    "price_source": "bundled",
+                    "news_enabled": True,
+                    "forecast_is_naive": False,
+                }
+            ],
+        }
+
+        response = self.client.post(
+            reverse("recommendations"),
+            {
+                "market": "cryptocurrency",
+                "assets": ["BTC"],
+                "model_name": "xgboost",
+                "use_news": "on",
+                "predict_steps": 12,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Cryptocurrency recommendations")
+        self.assertContains(response, "5.00%")
+        self.assertContains(response, "Bundled CSV + news")
+        self.assertContains(response, "Export ranking CSV")
+        self.assertContains(response, "recommendation_export.js")
+        self.assertContains(response, 'id="recommendation-export-data"')
+        rank_recommendations.assert_called_once_with(
+            ["BTC"],
+            model_name="xgboost",
+            predict_steps=12,
+            use_news=True,
+            refresh_news=False,
+        )
 
     @patch("dashboard.views.market_data_service.fetch_latest_prices")
     def test_latest_prices_endpoint_returns_dashboard_quotes(self, fetch_latest):
@@ -834,6 +980,9 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "EUR")
         self.assertContains(response, "BUY")
         self.assertContains(response, "No active news signals are available.")
+        self.assertContains(response, "Export ranking CSV")
+        self.assertContains(response, "recommendation_export.js")
+        self.assertContains(response, 'id="recommendation-export-data"')
         refresh_news.assert_called_once_with(["EUR", "GBP"])
 
     def test_market_refresh_is_post_only(self):
@@ -885,6 +1034,76 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "68.0%")
         predict_news.assert_called_once_with("BTC")
         run_forecast.assert_not_called()
+
+
+class RecommendationServiceTests(SimpleTestCase):
+    @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecast")
+    @patch("dashboard.recommendation_service.has_bundled_data", return_value=True)
+    def test_forecast_assets_are_ranked_by_return_and_confidence(
+        self, has_data, run_forecast
+    ):
+        forecasts = {
+            "AAA": {
+                "actual_prices": [100.0],
+                "future_predictions": [110.0],
+                "metrics": {
+                    "bullish_percent": 70.0,
+                    "directional_accuracy_percent": 60.0,
+                    "news_enabled": True,
+                    "forecast_is_naive": False,
+                },
+            },
+            "BBB": {
+                "actual_prices": [100.0],
+                "future_predictions": [105.0],
+                "metrics": {
+                    "bullish_percent": 60.0,
+                    "directional_accuracy_percent": 55.0,
+                    "news_enabled": True,
+                    "forecast_is_naive": False,
+                },
+            },
+        }
+        run_forecast.side_effect = lambda **kwargs: forecasts[kwargs["symbol"]]
+
+        result = recommendation_service.rank_buy_recommendations(
+            ["bbb", "AAA"],
+            model_name="xgboost",
+            predict_steps=12,
+            use_news=True,
+            refresh_news=False,
+        )
+
+        self.assertEqual(
+            [item["symbol"] for item in result["recommendations"]],
+            ["AAA", "BBB"],
+        )
+        self.assertEqual(result["recommendations"][0]["ranking_score"], 6.65)
+        self.assertEqual(result["buy_count"], 2)
+        self.assertEqual(result["mode"], "forecast")
+        self.assertEqual(run_forecast.call_count, 2)
+        self.assertTrue(
+            all(call.kwargs["use_news"] for call in run_forecast.call_args_list)
+        )
+
+    @patch("dashboard.recommendation_service.news_service.refresh_market_news")
+    def test_news_only_ranking_reuses_existing_market_flow(self, refresh_news):
+        refresh_news.return_value = {
+            "recommendations": [],
+            "asset_count": 1,
+            "cleared_count": 1,
+            "analyzed_count": 0,
+            "buy_count": 0,
+            "error_count": 1,
+        }
+
+        result = recommendation_service.rank_buy_recommendations(
+            ["BTC"], model_name="news_buy", refresh_news=True
+        )
+
+        self.assertEqual(result["mode"], "news_only")
+        self.assertEqual(result["refreshed_count"], 1)
+        refresh_news.assert_called_once_with(["BTC"])
 
 
 class ChartAdapterTests(SimpleTestCase):

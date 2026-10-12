@@ -1,0 +1,217 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<main class="container py-4 py-lg-5">
+    <a class="back-link mb-4" href="{% url 'dashboard' %}">&larr; All markets</a>
+
+    <div class="row g-4 align-items-start">
+        <div class="col-lg-4">
+            <section class="app-card accent-card recommendation-builder sticky-panel">
+                <div class="card-header">
+                    <div class="card-kicker mb-1">Recommendation lab</div>
+                    <h1 class="h4 mb-1">Rank potential buys</h1>
+                    <p class="small text-white-50 mb-0">Compare a market or selected assets with one consistent model.</p>
+                </div>
+                <div class="card-body p-4">
+                    <form method="post" id="recommendation-form">
+                        {% csrf_token %}
+                        {% if form.non_field_errors %}
+                        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+                        {% endif %}
+
+                        <div class="mb-3">
+                            <label class="form-label" for="{{ form.market.id_for_label }}">{{ form.market.label }}</label>
+                            {{ form.market }}
+                            {% for error in form.market.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                        </div>
+                        <div class="mb-3">
+                            <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                <label class="form-label mb-0" for="{{ form.assets.id_for_label }}">{{ form.assets.label }}</label>
+                                <button class="btn btn-sm btn-outline-light recommendation-clear-assets" type="button">Use all</button>
+                            </div>
+                            {{ form.assets }}
+                            {% if form.assets.help_text %}<div class="form-text text-white-50">{{ form.assets.help_text }}</div>{% endif %}
+                            {% for error in form.assets.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="{{ form.model_name.id_for_label }}">{{ form.model_name.label }}</label>
+                            {{ form.model_name }}
+                            {% for error in form.model_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="{{ form.predict_steps.id_for_label }}">{{ form.predict_steps.label }}</label>
+                            {{ form.predict_steps }}
+                            <div class="form-text text-white-50">{{ form.predict_steps.help_text }}</div>
+                            {% for error in form.predict_steps.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+                        </div>
+                        <div class="recommendation-options mb-4">
+                            <div class="form-check">
+                                {{ form.use_news }}
+                                <label class="form-check-label" for="{{ form.use_news.id_for_label }}">{{ form.use_news.label }}</label>
+                            </div>
+                            <div class="form-text text-white-50 mb-3">{{ form.use_news.help_text }}</div>
+                            <div class="form-check">
+                                {{ form.refresh_news }}
+                                <label class="form-check-label" for="{{ form.refresh_news.id_for_label }}">{{ form.refresh_news.label }}</label>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary w-100" id="recommendation-submit" type="submit">Generate ranked recommendations</button>
+                    </form>
+                </div>
+            </section>
+        </div>
+
+        <div class="col-lg-8">
+            {% if result %}
+            <div class="recommendations-hero mb-4">
+                <div>
+                    <div class="page-eyebrow">Ranked analysis</div>
+                    <h2 class="hero-title mb-2">{{ market_name }} recommendations</h2>
+                    <p class="hero-copy text-white-50 mx-0">
+                        {{ result.model_label }}{% if result.mode == 'forecast' %} · {{ result.predict_steps }}-step outlook · {% if result.use_news %}price + news{% else %}price only{% endif %}{% else %} · active news signals{% endif %}
+                    </p>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4" aria-label="Recommendation summary">
+                <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Selected assets</span><span class="metric-value">{{ result.asset_count }}</span></div></div>
+                <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Successfully ranked</span><span class="metric-value">{{ result.analyzed_count }}</span></div></div>
+                <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Buy signals</span><span class="metric-value text-success">{{ result.buy_count }}</span></div></div>
+                <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Assets with errors</span><span class="metric-value {% if result.error_count %}text-warning{% endif %}">{{ result.error_count }}</span></div></div>
+            </div>
+
+            <section class="app-card recommendations-card">
+                <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div>
+                        <h3 class="h5 mb-1">Buy ranking</h3>
+                        {% if result.mode == 'forecast' %}
+                        <small class="text-white-50">Ranking score = forecast return × blended bullish confidence. A BUY also requires a positive return and sufficient confidence.</small>
+                        {% else %}
+                        <small class="text-white-50">Ranking score = weighted news signal × news confidence.</small>
+                        {% endif %}
+                    </div>
+                    <div class="recommendation-export-actions">
+                        {% if result.refreshed_count %}<span class="asset-count">{{ result.refreshed_count }} news files reset</span>{% endif %}
+                        <button
+                            class="btn btn-sm btn-outline-light"
+                            type="button"
+                            data-export-ranking
+                            data-export-mode="{{ result.mode }}"
+                            data-export-filename="{{ market_name|slugify }}-{{ result.model_name }}-buy-ranking.csv"
+                        >Export ranking CSV</button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover align-middle mb-0 recommendations-table">
+                        <thead>
+                            {% if result.mode == 'forecast' %}
+                            <tr><th>Rank</th><th>Asset</th><th>Recommendation</th><th>Score</th><th>Forecast return</th><th>Bullish</th><th>Confidence</th><th>Direction accuracy</th><th>Inputs</th></tr>
+                            {% else %}
+                            <tr><th>Rank</th><th>Asset</th><th>Recommendation</th><th>Score</th><th>News signal</th><th>Confidence</th><th>Active / saved</th><th>Crawl result</th></tr>
+                            {% endif %}
+                        </thead>
+                        <tbody>
+                            {% for item in result.recommendations %}
+                            <tr{% if item.error %} class="recommendation-error-row"{% endif %}>
+                                <td>{% if item.rank %}<span class="rank-pill">#{{ item.rank }}</span>{% else %}&mdash;{% endif %}</td>
+                                <td><a class="link-light fw-bold" href="{% url 'predict' symbol_name=item.symbol %}">{{ item.symbol }}</a></td>
+                                {% if item.error %}
+                                <td colspan="{% if result.mode == 'forecast' %}7{% else %}5{% endif %}"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
+                                <td>{{ item.fetched|default:0 }} fetched</td>
+                                {% elif result.mode == 'forecast' %}
+                                <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span>{% if item.forecast_is_naive %}<div class="small text-white-50 mt-1">No validated edge</div>{% endif %}</td>
+                                <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>
+                                <td class="{% if item.expected_return_percent > 0 %}text-success{% elif item.expected_return_percent < 0 %}text-danger{% endif %}">{{ item.expected_return_percent|floatformat:2 }}%</td>
+                                <td>{{ item.bullish_percent|floatformat:1 }}%</td>
+                                <td>{{ item.confidence_percent|floatformat:1 }}%</td>
+                                <td>{{ item.directional_accuracy_percent|floatformat:1 }}%</td>
+                                <td>{% if item.price_source == 'forexsb' %}ForexSB{% else %}Bundled CSV{% endif %}{% if item.news_enabled %} + news{% endif %}</td>
+                                {% else %}
+                                <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span></td>
+                                <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>
+                                <td class="{% if item.signal_score > 0 %}text-success{% elif item.signal_score < 0 %}text-danger{% endif %}">{{ item.signal_score|floatformat:2 }}</td>
+                                <td>{{ item.confidence_percent|floatformat:1 }}%</td>
+                                <td>{{ item.articles_analyzed }} / {{ item.articles_saved }}</td>
+                                <td>{{ item.fetched|default:0 }} fetched</td>
+                                {% endif %}
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="9" class="text-center text-white-50 py-5">No assets were available to rank.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            {% else %}
+            <section class="app-card recommendation-empty d-flex align-items-center justify-content-center text-center">
+                <div>
+                    <span class="empty-chart-icon"><svg viewBox="0 0 24 24"><path d="M3 18l5-5 4 3 8-10M3 21h18"/></svg></span>
+                    <h2 class="h5">Your market ranking will appear here</h2>
+                    <p class="text-white-50 mb-0">Choose a market, optionally narrow the assets, and run one model across the selection.</p>
+                </div>
+            </section>
+            {% endif %}
+
+            <div class="alert alert-warning mt-4 mb-0" role="note">
+                Experimental research signals only—not financial advice. Rankings do not account for your circumstances, liquidity, transaction costs, or portfolio risk.
+            </div>
+        </div>
+    </div>
+</main>
+
+{{ market_names|json_script:"recommendation-market-names" }}
+{% if result %}{{ result.recommendations|json_script:"recommendation-export-data" }}{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const recommendationMarket = document.querySelector('[data-recommendation-market]');
+    const recommendationAssets = document.querySelector('[data-recommendation-assets]');
+    const recommendationModel = document.getElementById('{{ form.model_name.id_for_label }}');
+    const useNews = document.getElementById('{{ form.use_news.id_for_label }}');
+    const refreshNews = document.getElementById('{{ form.refresh_news.id_for_label }}');
+    const predictSteps = document.getElementById('{{ form.predict_steps.id_for_label }}');
+    const marketNames = JSON.parse(document.getElementById('recommendation-market-names').textContent);
+
+    function filterAssets(resetSelection) {
+        const activeName = marketNames[recommendationMarket.value];
+        recommendationAssets.querySelectorAll('optgroup').forEach(function (group) {
+            const active = activeName === 'All markets' || group.label === activeName;
+            group.hidden = !active;
+            Array.from(group.children).forEach(function (option) {
+                option.disabled = !active;
+                if (!active || resetSelection) option.selected = false;
+            });
+        });
+    }
+
+    function syncNewsOptions() {
+        const newsOnly = recommendationModel.value === 'news_buy';
+        if (newsOnly) useNews.checked = true;
+        useNews.disabled = newsOnly;
+        refreshNews.disabled = !useNews.checked;
+        predictSteps.readOnly = newsOnly;
+    }
+
+    recommendationMarket.addEventListener('change', function () { filterAssets(true); });
+    recommendationModel.addEventListener('change', syncNewsOptions);
+    useNews.addEventListener('change', syncNewsOptions);
+    document.querySelector('.recommendation-clear-assets').addEventListener('click', function () {
+        Array.from(recommendationAssets.options).forEach(function (option) { option.selected = false; });
+    });
+    document.getElementById('recommendation-form').addEventListener('submit', function (event) {
+        if (refreshNews.checked && !window.confirm('Clear saved news for the selected assets, crawl fresh headlines, and generate the ranking?')) {
+            event.preventDefault();
+            return;
+        }
+        const button = document.getElementById('recommendation-submit');
+        button.disabled = true;
+        button.textContent = recommendationModel.value === 'news_buy' ? 'Analyzing news…' : 'Training and ranking…';
+    });
+
+    filterAssets(false);
+    syncNewsOptions();
+</script>
+{% if result %}<script src="{% static 'dashboard/js/recommendation_export.js' %}"></script>{% endif %}
+{% endblock %}

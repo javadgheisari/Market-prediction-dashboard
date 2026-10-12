@@ -89,6 +89,8 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .asset-card-header { display: grid; gap: .8rem; padding: 1.2rem 1.25rem .9rem; }
 .asset-count { color: var(--app-muted); font-size: .7rem; border: 1px solid var(--app-border); border-radius: 99px; padding: .2rem .55rem; }
 .market-recommendations-btn { width: 100%; }
+.market-ranking-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+.market-ranking-actions form { display: flex; }
 .asset-row { display: grid; grid-template-columns: 1fr; gap: .4rem; padding: .55rem; margin-bottom: .55rem; background: rgba(5,14,26,.46); border: 1px solid transparent; border-radius: 12px; transition: background .2s, border-color .2s; }
 .asset-row:hover { background: rgba(22,40,64,.8); border-color: var(--app-border); }
 .asset-link { display: flex; align-items: center; justify-content: space-between; color: var(--app-text); text-decoration: none; font-weight: 700; padding: .35rem .45rem; }
@@ -131,6 +133,14 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .rank-pill { display: inline-flex; min-width: 2.4rem; justify-content: center; color: #8be9de; background: rgba(45,212,191,.1); border: 1px solid rgba(45,212,191,.22); border-radius: 99px; padding: .18rem .42rem; font-weight: 800; }
 .recommendation-badge { min-height: 0; padding: .38rem .58rem; border-radius: 8px; font-size: .7rem; }
 .recommendation-error-row { background: rgba(251,146,60,.035); }
+.recommendation-export-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .65rem; }
+.recommendation-builder .card-body { overflow: visible; }
+.recommendation-assets-select { min-height: 220px; }
+.recommendation-assets-select optgroup { color: var(--app-cyan); font-weight: 700; }
+.recommendation-assets-select option { color: var(--app-text); font-weight: 500; padding: .3rem .55rem; }
+.recommendation-options { padding: .9rem 1rem; border: 1px solid var(--app-border); border-radius: 12px; background: rgba(5,14,26,.36); }
+.recommendation-options .form-check-label { color: #d9e3ef; font-size: .82rem; }
+.recommendation-empty { min-height: 540px; padding: 2rem; }
 .chart-card { padding: .7rem; min-height: 500px; }
 .chart-actions { min-height: 35px; }
 .detailed-chart-modal { background: #0b1728; border: 1px solid var(--app-border); border-radius: 18px; overflow: hidden; }
@@ -158,6 +168,6 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .alert-warning { color: #fed7aa; background: rgba(154,52,18,.2); border-color: rgba(251,146,60,.25); }
 
 @media (max-width: 991.98px) { .sticky-panel { position: static; } .chart-empty { min-height: 360px; } .crypto-asset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .recommendations-hero { align-items: stretch; flex-direction: column; } }
-@media (max-width: 575.98px) { .site-header { height: 66px; } .status-pill { display: none; } .hero-title { font-size: 2.25rem; } .asset-row { grid-template-columns: 1fr; } .asset-news-btn { width: 100%; } .site-footer .container { justify-content: center !important; text-align: center; } }
+@media (max-width: 575.98px) { .site-header { height: 66px; } .status-pill { display: none; } .hero-title { font-size: 2.25rem; } .asset-row { grid-template-columns: 1fr; } .asset-news-btn { width: 100%; } .market-ranking-actions { grid-template-columns: 1fr; } .site-footer .container { justify-content: center !important; text-align: center; } }
 @media (max-width: 575.98px) { .crypto-asset-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; } }

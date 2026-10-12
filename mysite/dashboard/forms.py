@@ -1,4 +1,5 @@
 from django import forms
+from django.utils.text import slugify
 
 MODEL_CHOICES = (
     ("xgboost", "XGBoost Portfolio (recommended)"),
@@ -35,6 +36,116 @@ PRICE_SOURCE_CHOICES = (
 )
 
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+
+
+class RecommendationForm(forms.Form):
+    market = forms.ChoiceField(
+        label="Market",
+        widget=forms.Select(
+            attrs={"class": "form-select", "data-recommendation-market": "1"}
+        ),
+    )
+    assets = forms.MultipleChoiceField(
+        label="Assets",
+        required=False,
+        widget=forms.SelectMultiple(
+            attrs={
+                "class": "form-select recommendation-assets-select",
+                "size": "9",
+                "data-recommendation-assets": "1",
+            }
+        ),
+        help_text="Leave every asset unselected to rank the full market.",
+    )
+    model_name = forms.ChoiceField(
+        choices=MODEL_CHOICES,
+        label="Ranking model",
+        initial="xgboost",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    use_news = forms.BooleanField(
+        label="Include crawled news features",
+        required=False,
+        initial=True,
+        help_text=(
+            "News-only always uses news. Other models combine price history "
+            "with the saved timestamped news signals."
+        ),
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    refresh_news = forms.BooleanField(
+        label="Clear and crawl fresh news before ranking",
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    predict_steps = forms.IntegerField(
+        label="Forecast steps",
+        min_value=1,
+        max_value=48,
+        initial=24,
+        help_text="Used by price models; one step is one source candle.",
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+    )
+
+    def __init__(self, *args, asset_groups=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.asset_groups = asset_groups or {}
+        self.market_symbols = {
+            slugify(market): list(symbols)
+            for market, symbols in self.asset_groups.items()
+        }
+        self.market_names = {
+            slugify(market): market for market in self.asset_groups
+        }
+        all_symbols = list(
+            dict.fromkeys(
+                symbol
+                for symbols in self.asset_groups.values()
+                for symbol in symbols
+            )
+        )
+        self.market_symbols["all-markets"] = all_symbols
+        self.market_names["all-markets"] = "All markets"
+        self.fields["market"].choices = [
+            (market_slug, self.market_names[market_slug])
+            for market_slug in self.market_symbols
+        ]
+        self.fields["assets"].choices = [
+            (market, [(symbol, symbol) for symbol in symbols])
+            for market, symbols in self.asset_groups.items()
+        ]
+        if self.asset_groups:
+            self.fields["market"].initial = slugify(next(iter(self.asset_groups)))
+
+    def clean(self):
+        cleaned_data = super().clean()
+        market = cleaned_data.get("market")
+        selected = cleaned_data.get("assets") or []
+        allowed = set(self.market_symbols.get(market, []))
+        invalid = [symbol for symbol in selected if symbol not in allowed]
+        if invalid:
+            self.add_error(
+                "assets",
+                "Choose assets that belong to the selected market.",
+            )
+
+        if cleaned_data.get("model_name") == "news_buy":
+            cleaned_data["use_news"] = True
+        if not cleaned_data.get("use_news"):
+            cleaned_data["refresh_news"] = False
+        return cleaned_data
+
+    def selected_symbols(self):
+        if not hasattr(self, "cleaned_data"):
+            raise ValueError("Call is_valid() before selected_symbols().")
+        market = self.cleaned_data["market"]
+        return self.cleaned_data.get("assets") or self.market_symbols[market]
+
+    def selected_market_name(self):
+        if not hasattr(self, "cleaned_data"):
+            raise ValueError("Call is_valid() before selected_market_name().")
+        return self.market_names[self.cleaned_data["market"]]
 
 
 class NameForm(forms.Form):

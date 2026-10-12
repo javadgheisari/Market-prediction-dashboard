@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <main class="container py-4 py-lg-5">
@@ -31,7 +32,16 @@
                 <h2 class="h5 mb-1">News-based recommendations</h2>
                 <small class="text-white-50">Ranking score = weighted news signal × model confidence. Negative scores rank below positive scores.</small>
             </div>
-            <span class="asset-count">{{ cleared_count }} news files reset</span>
+            <div class="recommendation-export-actions">
+                <span class="asset-count">{{ cleared_count }} news files reset</span>
+                <button
+                    class="btn btn-sm btn-outline-light"
+                    type="button"
+                    data-export-ranking
+                    data-export-mode="news_only"
+                    data-export-filename="{{ market_name|slugify }}-news-buy-ranking.csv"
+                >Export ranking CSV</button>
+            </div>
         </div>
         <div class="table-responsive">
             <table class="table table-dark table-hover align-middle mb-0 recommendations-table">
@@ -76,6 +86,7 @@
         Experimental news signal only—not financial advice. Rankings do not consider price, valuation, liquidity, portfolio risk, transaction costs, or your circumstances.
     </div>
 </main>
+{{ recommendations|json_script:"recommendation-export-data" }}
 {% endblock %}
 
 {% block scripts %}
@@ -92,4 +103,5 @@
         });
     });
 </script>
+<script src="{% static 'dashboard/js/recommendation_export.js' %}"></script>
 {% endblock %}
