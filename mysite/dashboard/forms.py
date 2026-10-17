@@ -11,6 +11,7 @@ MODEL_CHOICES = (
 
 RECOMMENDATION_MODEL_CHOICES = (
     ("ensemble", "News + XGBoost + GRU + LSTM (recommended)"),
+    ("model_ensemble", "XGBoost + GRU + LSTM (news optional)"),
     ("xgboost", "XGBoost Portfolio"),
     *MODEL_CHOICES[1:],
 )
@@ -74,8 +75,9 @@ class RecommendationForm(forms.Form):
         required=False,
         initial=True,
         help_text=(
-            "The ensemble and news-only modes always use news. Individual "
-            "models can combine price history with timestamped news features."
+            "The news ensemble and news-only modes always use news. The "
+            "three-model ensemble and individual models can optionally combine "
+            "price history with timestamped news features."
         ),
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )

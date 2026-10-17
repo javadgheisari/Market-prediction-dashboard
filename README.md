@@ -305,7 +305,9 @@ Choose a market, optionally narrow it to specific assets, and use the default
 ensemble to combine independent news, XGBoost, GRU, and LSTM evidence. Its four
 confidence-adjusted directional signals are weighted equally, and a `BUY`
 requires at least three positive components, 55% average confidence, and a
-validated model edge. Individual XGBoost, Chronos-2, GRU, LSTM, and news-only
+validated model edge. A separate three-model ensemble combines XGBoost, GRU,
+and LSTM with equal weights; crawled news features can be enabled or disabled
+for all three models. Individual XGBoost, Chronos-2, GRU, LSTM, and news-only
 rankings remain available, including the option to refresh news first.
 Assets without automatic price history or usable news remain in the table with
 an actionable error instead of aborting the rest of the market ranking. Use

@@ -399,6 +399,21 @@ class RecommendationFormTests(SimpleTestCase):
         self.assertTrue(form.is_valid(), form.errors)
         self.assertTrue(form.cleaned_data["use_news"])
 
+    def test_three_model_ensemble_allows_news_to_be_disabled(self):
+        form = RecommendationForm(
+            {
+                "market": "cryptocurrency",
+                "model_name": "model_ensemble",
+                "refresh_news": "on",
+                "predict_steps": 24,
+            },
+            asset_groups=self.asset_groups,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertFalse(form.cleaned_data["use_news"])
+        self.assertFalse(form.cleaned_data["refresh_news"])
+
 
 class NewsPriceOverlapTests(SimpleTestCase):
     def test_prices_keep_pre_news_context(self):
@@ -713,6 +728,66 @@ class DashboardViewTests(SimpleTestCase):
             ["BTC"],
             model_name="ensemble",
             predict_steps=24,
+            use_news=True,
+            refresh_news=False,
+        )
+
+    @patch("dashboard.views.recommendation_service.rank_buy_recommendations")
+    @patch("dashboard.views.list_available_assets")
+    def test_general_recommendations_renders_three_model_ensemble(
+        self, list_assets, rank_recommendations
+    ):
+        list_assets.return_value = {"Cryptocurrency": ["BTC"]}
+        rank_recommendations.return_value = {
+            "mode": "model_ensemble",
+            "model_name": "model_ensemble",
+            "model_label": "XGBoost + GRU + LSTM (news optional)",
+            "use_news": True,
+            "predict_steps": 12,
+            "asset_count": 1,
+            "refreshed_count": 0,
+            "analyzed_count": 1,
+            "buy_count": 1,
+            "error_count": 0,
+            "recommendations": [
+                {
+                    "symbol": "BTC",
+                    "rank": 1,
+                    "decision": "BUY",
+                    "should_buy": True,
+                    "ranking_score": 0.12,
+                    "xgboost_score": 0.2,
+                    "gru_score": 0.1,
+                    "lstm_score": 0.06,
+                    "positive_components": 3,
+                    "component_count": 3,
+                    "confidence_percent": 65.0,
+                    "forecast_is_naive": False,
+                    "price_source": "bundled",
+                    "news_enabled": True,
+                }
+            ],
+        }
+
+        response = self.client.post(
+            reverse("recommendations"),
+            {
+                "market": "cryptocurrency",
+                "model_name": "model_ensemble",
+                "use_news": "on",
+                "predict_steps": 12,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "three equally weighted models")
+        self.assertContains(response, "3 / 3")
+        self.assertContains(response, "Bundled CSV + news")
+        self.assertContains(response, 'data-export-mode="model_ensemble"')
+        rank_recommendations.assert_called_once_with(
+            ["BTC"],
+            model_name="model_ensemble",
+            predict_steps=12,
             use_news=True,
             refresh_news=False,
         )
@@ -1278,6 +1353,65 @@ class RecommendationServiceTests(SimpleTestCase):
         self.assertEqual(item["positive_components"], 2)
         self.assertFalse(item["should_buy"])
         self.assertEqual(item["decision"], "DO NOT BUY")
+
+    @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecasts")
+    @patch("dashboard.recommendation_service.has_bundled_data", return_value=True)
+    def test_three_model_ensemble_combines_models_with_optional_news_features(
+        self, has_data, run_forecasts
+    ):
+        forecasts = {
+            "xgboost": (110.0, 70.0, 60.0),
+            "gru": (106.0, 65.0, 55.0),
+            "lstm": (96.0, 40.0, 50.0),
+        }
+
+        def forecast_charts(**kwargs):
+            return {
+                model_name: {
+                    "actual_prices": [100.0],
+                    "future_predictions": [target],
+                    "metrics": {
+                        "bullish_percent": bullish,
+                        "directional_accuracy_percent": accuracy,
+                        "news_enabled": kwargs["use_news"],
+                        "forecast_is_naive": False,
+                    },
+                }
+                for model_name, (target, bullish, accuracy) in forecasts.items()
+            }
+
+        run_forecasts.side_effect = forecast_charts
+        for include_news in (False, True):
+            with self.subTest(include_news=include_news):
+                result = recommendation_service.rank_buy_recommendations(
+                    ["BTC"],
+                    model_name="model_ensemble",
+                    predict_steps=12,
+                    use_news=include_news,
+                    refresh_news=False,
+                )
+
+                item = result["recommendations"][0]
+                self.assertEqual(result["mode"], "model_ensemble")
+                self.assertEqual(result["use_news"], include_news)
+                run_forecasts.assert_called_once_with(
+                    symbol="BTC",
+                    model_names=("xgboost", "gru", "lstm"),
+                    predict_steps=12,
+                    price_csv=None,
+                    price_source="bundled",
+                    use_news=include_news,
+                    advanced_config=recommendation_service.DEFAULT_ADVANCED_CONFIG,
+                )
+                self.assertEqual(item["component_count"], 3)
+                self.assertEqual(item["positive_components"], 2)
+                self.assertAlmostEqual(item["xgboost_score"], 0.266)
+                self.assertAlmostEqual(item["gru_score"], 0.1845)
+                self.assertAlmostEqual(item["lstm_score"], -0.087)
+                self.assertAlmostEqual(item["ranking_score"], 0.1212)
+                self.assertEqual(item["news_enabled"], include_news)
+                self.assertTrue(item["should_buy"])
+                run_forecasts.reset_mock()
 
 
 class ChartAdapterTests(SimpleTestCase):

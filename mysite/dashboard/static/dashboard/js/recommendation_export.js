@@ -5,7 +5,27 @@
 
     const recommendations = JSON.parse(dataElement.textContent);
     const mode = button.dataset.exportMode;
-    const columns = mode === 'ensemble'
+    const columns = mode === 'model_ensemble'
+        ? [
+            ['rank', 'Rank'],
+            ['symbol', 'Asset'],
+            ['decision', 'Recommendation'],
+            ['ranking_score', 'Ensemble score'],
+            ['xgboost_score', 'XGBoost score'],
+            ['gru_score', 'GRU score'],
+            ['lstm_score', 'LSTM score'],
+            ['positive_components', 'Positive models'],
+            ['component_count', 'Model count'],
+            ['expected_return_percent', 'Mean forecast return (%)'],
+            ['confidence_percent', 'Mean confidence (%)'],
+            ['current_price', 'Current price'],
+            ['target_price', 'Mean forecast target'],
+            ['price_source', 'Price source'],
+            ['news_enabled', 'News features included'],
+            ['forecast_is_naive', 'All price forecasts naive'],
+            ['error', 'Error'],
+        ]
+        : mode === 'ensemble'
         ? [
             ['rank', 'Rank'],
             ['symbol', 'Asset'],

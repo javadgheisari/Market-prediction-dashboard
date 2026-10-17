@@ -69,7 +69,7 @@
                     <div class="page-eyebrow">Ranked analysis</div>
                     <h2 class="hero-title mb-2">{{ market_name }} recommendations</h2>
                     <p class="hero-copy text-white-50 mx-0">
-                        {{ result.model_label }}{% if result.mode == 'ensemble' %} · {{ result.predict_steps }}-step outlook · four equally weighted signals{% elif result.mode == 'forecast' %} · {{ result.predict_steps }}-step outlook · {% if result.use_news %}price + news{% else %}price only{% endif %}{% else %} · active news signals{% endif %}
+                        {{ result.model_label }}{% if result.mode == 'ensemble' %} · {{ result.predict_steps }}-step outlook · four equally weighted signals{% elif result.mode == 'model_ensemble' %} · {{ result.predict_steps }}-step outlook · three equally weighted models · {% if result.use_news %}price + news features{% else %}price only{% endif %}{% elif result.mode == 'forecast' %} · {{ result.predict_steps }}-step outlook · {% if result.use_news %}price + news{% else %}price only{% endif %}{% else %} · active news signals{% endif %}
                     </p>
                 </div>
             </div>
@@ -87,6 +87,8 @@
                         <h3 class="h5 mb-1">Buy ranking</h3>
                         {% if result.mode == 'ensemble' %}
                         <small class="text-white-50">Score = the equal-weight mean of confidence-adjusted directional signals from XGBoost, GRU, LSTM, and news. A BUY requires at least 3 of 4 positive signals and 55% average confidence.</small>
+                        {% elif result.mode == 'model_ensemble' %}
+                        <small class="text-white-50">Score = the equal-weight mean of confidence-adjusted XGBoost, GRU, and LSTM directional signals. A BUY requires at least 2 of 3 positive models and 55% average confidence.</small>
                         {% elif result.mode == 'forecast' %}
                         <small class="text-white-50">Ranking score = forecast return × blended bullish confidence. A BUY also requires a positive return and sufficient confidence.</small>
                         {% else %}
@@ -109,6 +111,8 @@
                         <thead>
                             {% if result.mode == 'ensemble' %}
                             <tr><th>Rank</th><th>Asset</th><th>Recommendation</th><th>Score</th><th>XGBoost</th><th>GRU</th><th>LSTM</th><th>News</th><th>Agreement</th><th>Confidence</th></tr>
+                            {% elif result.mode == 'model_ensemble' %}
+                            <tr><th>Rank</th><th>Asset</th><th>Recommendation</th><th>Score</th><th>XGBoost</th><th>GRU</th><th>LSTM</th><th>Agreement</th><th>Confidence</th><th>Inputs</th></tr>
                             {% elif result.mode == 'forecast' %}
                             <tr><th>Rank</th><th>Asset</th><th>Recommendation</th><th>Score</th><th>Forecast return</th><th>Bullish</th><th>Confidence</th><th>Direction accuracy</th><th>Inputs</th></tr>
                             {% else %}
@@ -121,7 +125,7 @@
                                 <td>{% if item.rank %}<span class="rank-pill">#{{ item.rank }}</span>{% else %}&mdash;{% endif %}</td>
                                 <td><a class="link-light fw-bold" href="{% url 'predict' symbol_name=item.symbol %}">{{ item.symbol }}</a></td>
                                 {% if item.error %}
-                                <td colspan="{% if result.mode == 'ensemble' %}7{% elif result.mode == 'forecast' %}6{% else %}5{% endif %}"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
+                                <td colspan="{% if result.mode == 'ensemble' or result.mode == 'model_ensemble' %}7{% elif result.mode == 'forecast' %}6{% else %}5{% endif %}"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
                                 <td>{{ item.fetched|default:0 }} fetched</td>
                                 {% elif result.mode == 'ensemble' %}
                                 <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span>{% if item.forecast_is_naive %}<div class="small text-white-50 mt-1">No validated model edge</div>{% endif %}</td>
@@ -132,6 +136,15 @@
                                 <td class="{% if item.news_score > 0 %}text-success{% elif item.news_score < 0 %}text-danger{% endif %}">{{ item.news_score|floatformat:3 }}</td>
                                 <td>{{ item.positive_components }} / {{ item.component_count }}</td>
                                 <td>{{ item.confidence_percent|floatformat:1 }}%</td>
+                                {% elif result.mode == 'model_ensemble' %}
+                                <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span>{% if item.forecast_is_naive %}<div class="small text-white-50 mt-1">No validated model edge</div>{% endif %}</td>
+                                <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>
+                                <td class="{% if item.xgboost_score > 0 %}text-success{% elif item.xgboost_score < 0 %}text-danger{% endif %}">{{ item.xgboost_score|floatformat:3 }}</td>
+                                <td class="{% if item.gru_score > 0 %}text-success{% elif item.gru_score < 0 %}text-danger{% endif %}">{{ item.gru_score|floatformat:3 }}</td>
+                                <td class="{% if item.lstm_score > 0 %}text-success{% elif item.lstm_score < 0 %}text-danger{% endif %}">{{ item.lstm_score|floatformat:3 }}</td>
+                                <td>{{ item.positive_components }} / {{ item.component_count }}</td>
+                                <td>{{ item.confidence_percent|floatformat:1 }}%</td>
+                                <td>{% if item.price_source == 'forexsb' %}ForexSB{% else %}Bundled CSV{% endif %}{% if item.news_enabled %} + news{% endif %}</td>
                                 {% elif result.mode == 'forecast' %}
                                 <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span>{% if item.forecast_is_naive %}<div class="small text-white-50 mt-1">No validated edge</div>{% endif %}</td>
                                 <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>

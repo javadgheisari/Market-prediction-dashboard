@@ -143,6 +143,25 @@ def _saved_news_recommendations(symbols: list[str]) -> dict[str, object]:
     return _rank_result(recommendations, len(symbols), 0)
 
 
+def _model_component_scores(
+    forecasts: dict[str, dict[str, Any]],
+) -> dict[str, float]:
+    """Return comparable -1..1 confidence-adjusted directional scores."""
+    return {
+        model_name: (
+            0.0
+            if forecast["forecast_is_naive"]
+            else (
+                (float(forecast["bullish_percent"]) - 50.0)
+                / 50.0
+                * float(forecast["confidence_percent"])
+                / 100.0
+            )
+        )
+        for model_name, forecast in forecasts.items()
+    }
+
+
 def _ensemble_recommendation(
     symbol: str,
     predict_steps: int,
@@ -172,19 +191,7 @@ def _ensemble_recommendation(
     # Put every member on the same -1..1 directional-conviction scale. Price
     # models contribute their bullish edge around 50%, confidence-adjusted;
     # the news member already supplies a directional signal in that range.
-    component_scores = {
-        model_name: (
-            0.0
-            if forecast["forecast_is_naive"]
-            else (
-                (float(forecast["bullish_percent"]) - 50.0)
-                / 50.0
-                * float(forecast["confidence_percent"])
-                / 100.0
-            )
-        )
-        for model_name, forecast in forecasts.items()
-    }
+    component_scores = _model_component_scores(forecasts)
     component_scores["news"] = (
         float(news["signal_score"])
         * float(news["confidence_percent"])
@@ -244,6 +251,89 @@ def _ensemble_recommendation(
         "forecast_is_naive": all_forecasts_naive,
         "price_source": forecasts["xgboost"]["price_source"],
         "news_enabled": True,
+    }
+
+
+def _model_ensemble_recommendation(
+    symbol: str,
+    predict_steps: int,
+    use_news: bool,
+) -> dict[str, Any]:
+    """Combine XGBoost, GRU, and LSTM, optionally trained with news features."""
+    price_source = _price_source(symbol)
+    charts = forecaster.run_dashboard_forecasts(
+        symbol=symbol,
+        model_names=ENSEMBLE_MODEL_NAMES,
+        predict_steps=predict_steps,
+        price_csv=None,
+        price_source=price_source,
+        use_news=use_news,
+        advanced_config=DEFAULT_ADVANCED_CONFIG.copy(),
+    )
+    forecasts = {
+        model_name: _recommendation_from_chart(
+            charts[model_name], price_source, use_news
+        )
+        for model_name in ENSEMBLE_MODEL_NAMES
+    }
+    component_scores = _model_component_scores(forecasts)
+    ranking_score = sum(component_scores.values()) / 3.0
+    positive_components = sum(score > 0 for score in component_scores.values())
+    confidence = sum(
+        float(item["confidence_percent"]) for item in forecasts.values()
+    ) / 3.0
+    all_forecasts_naive = all(
+        bool(item["forecast_is_naive"]) for item in forecasts.values()
+    )
+    should_buy = (
+        not all_forecasts_naive
+        and ranking_score > 0
+        and positive_components >= 2
+        and confidence >= 55.0
+    )
+
+    return {
+        "decision": "BUY" if should_buy else "DO NOT BUY",
+        "should_buy": should_buy,
+        "ranking_score": round(ranking_score, 4),
+        "xgboost_score": round(component_scores["xgboost"], 4),
+        "gru_score": round(component_scores["gru"], 4),
+        "lstm_score": round(component_scores["lstm"], 4),
+        "positive_components": positive_components,
+        "component_count": 3,
+        "expected_return_percent": round(
+            sum(
+                float(item["expected_return_percent"])
+                for item in forecasts.values()
+            )
+            / 3.0,
+            4,
+        ),
+        "confidence_percent": round(confidence, 1),
+        "bullish_percent": round(
+            sum(float(item["bullish_percent"]) for item in forecasts.values())
+            / 3.0,
+            1,
+        ),
+        "directional_accuracy_percent": round(
+            sum(
+                float(item["directional_accuracy_percent"])
+                for item in forecasts.values()
+            )
+            / 3.0,
+            1,
+        ),
+        "current_price": sum(
+            float(item["current_price"]) for item in forecasts.values()
+        )
+        / 3.0,
+        "target_price": sum(
+            float(item["target_price"]) for item in forecasts.values()
+        )
+        / 3.0,
+        "forecast_is_naive": all_forecasts_naive,
+        "price_source": forecasts["xgboost"]["price_source"],
+        "news_enabled": use_news,
     }
 
 
@@ -345,6 +435,12 @@ def rank_buy_recommendations(
         try:
             if model_name == "ensemble":
                 item.update(_ensemble_recommendation(symbol, predict_steps))
+            elif model_name == "model_ensemble":
+                item.update(
+                    _model_ensemble_recommendation(
+                        symbol, predict_steps, use_news
+                    )
+                )
             else:
                 item.update(
                     _forecast_recommendation(
@@ -359,9 +455,13 @@ def rank_buy_recommendations(
         recommendations.append(item)
 
     result = _rank_result(recommendations, len(normalized), refreshed_count)
+    result_mode = {
+        "ensemble": "ensemble",
+        "model_ensemble": "model_ensemble",
+    }.get(model_name, "forecast")
     return {
         **result,
-        "mode": "ensemble" if model_name == "ensemble" else "forecast",
+        "mode": result_mode,
         "model_name": model_name,
         "model_label": model_labels[model_name],
         "use_news": use_news,
