@@ -39,6 +39,7 @@
     "XAG": {"query": "silver price XAG", "terms": ["silver", "XAG"]},
     "XAU": {"query": "gold price XAU", "terms": ["gold", "XAU"]},
     "XLM": {"query": "Stellar XLM cryptocurrency", "terms": ["Stellar", "XLM"]},
-    "XRP": {"query": "XRP Ripple cryptocurrency", "terms": ["XRP", "Ripple"]}
+    "XRP": {"query": "XRP Ripple cryptocurrency", "terms": ["XRP", "Ripple"]},
+    "PEPE": {"query": "Pepe the Frog PEPE cryptocurrency", "terms": ["Pepe", "PEPE"]}
   }
 }

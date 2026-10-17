@@ -154,8 +154,32 @@ def run_dashboard_forecast(
     advanced_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Train the selected improved model and return JSON-safe chart data."""
-    if model_name not in MODEL_KINDS:
-        raise ValueError(f"Unsupported model '{model_name}'.")
+    return run_dashboard_forecasts(
+        symbol=symbol,
+        model_names=(model_name,),
+        predict_steps=predict_steps,
+        price_csv=price_csv,
+        use_news=use_news,
+        price_source=price_source,
+        advanced_config=advanced_config,
+    )[model_name]
+
+
+def run_dashboard_forecasts(
+    symbol: str,
+    model_names: tuple[str, ...],
+    predict_steps: int,
+    price_csv: Path | None,
+    use_news: bool,
+    price_source: str = "bundled",
+    advanced_config: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Train multiple models against one shared, refreshed data snapshot."""
+    if not model_names:
+        raise ValueError("Choose at least one forecast model.")
+    unsupported = [name for name in model_names if name not in MODEL_KINDS]
+    if unsupported:
+        raise ValueError(f"Unsupported model '{unsupported[0]}'.")
 
     if price_source == "forexsb":
         source_context = forexsb_h1_csv(symbol)
@@ -167,6 +191,9 @@ def run_dashboard_forecast(
             f"No crawled news file exists for {symbol}. Click 'Crawl latest "
             f"{symbol} news' first, then train again with news."
         )
+
+    config = advanced_config or {}
+    charts = {}
     with source_context as source_price_csv:
         with refreshed_price_csv(source_price_csv, symbol) as normalized_price_csv:
             price_context = (
@@ -175,14 +202,17 @@ def run_dashboard_forecast(
                 else nullcontext(normalized_price_csv)
             )
             with price_context as training_price_csv:
-                metrics = _train_model(
-                    model_name=model_name,
-                    training_price_csv=training_price_csv,
-                    predict_steps=predict_steps,
-                    news_csv=news_csv,
-                    advanced_config=advanced_config or {},
-                )
-    return build_plotly_chart(metrics)
+                for model_name in model_names:
+                    charts[model_name] = build_plotly_chart(
+                        _train_model(
+                            model_name=model_name,
+                            training_price_csv=training_price_csv,
+                            predict_steps=predict_steps,
+                            news_csv=news_csv,
+                            advanced_config=config,
+                        )
+                    )
+    return charts
 
 
 def _train_model(

@@ -9,6 +9,12 @@ MODEL_CHOICES = (
     ("lstm", "Improved LSTM"),
 )
 
+RECOMMENDATION_MODEL_CHOICES = (
+    ("ensemble", "News + XGBoost + GRU + LSTM (recommended)"),
+    ("xgboost", "XGBoost Portfolio"),
+    *MODEL_CHOICES[1:],
+)
+
 ADVANCED_CONFIG_FIELDS = (
     "window",
     "split_ratio",
@@ -58,9 +64,9 @@ class RecommendationForm(forms.Form):
         help_text="Leave every asset unselected to rank the full market.",
     )
     model_name = forms.ChoiceField(
-        choices=MODEL_CHOICES,
+        choices=RECOMMENDATION_MODEL_CHOICES,
         label="Ranking model",
-        initial="xgboost",
+        initial="ensemble",
         widget=forms.Select(attrs={"class": "form-select"}),
     )
     use_news = forms.BooleanField(
@@ -68,8 +74,8 @@ class RecommendationForm(forms.Form):
         required=False,
         initial=True,
         help_text=(
-            "News-only always uses news. Other models combine price history "
-            "with the saved timestamped news signals."
+            "The ensemble and news-only modes always use news. Individual "
+            "models can combine price history with timestamped news features."
         ),
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
     )
@@ -130,7 +136,7 @@ class RecommendationForm(forms.Form):
                 "Choose assets that belong to the selected market.",
             )
 
-        if cleaned_data.get("model_name") == "news_buy":
+        if cleaned_data.get("model_name") in {"ensemble", "news_buy"}:
             cleaned_data["use_news"] = True
         if not cleaned_data.get("use_news"):
             cleaned_data["refresh_news"] = False

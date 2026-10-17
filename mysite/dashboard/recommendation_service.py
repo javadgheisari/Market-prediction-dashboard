@@ -3,7 +3,10 @@ from typing import Any
 
 from dashboard import forecaster, forexsb_service, news_service
 from dashboard.data_paths import has_bundled_data
-from dashboard.forms import MODEL_CHOICES
+from dashboard.forms import RECOMMENDATION_MODEL_CHOICES
+
+
+ENSEMBLE_MODEL_NAMES = ("xgboost", "gru", "lstm")
 
 
 DEFAULT_ADVANCED_CONFIG = {
@@ -67,6 +70,14 @@ def _forecast_recommendation(
         use_news=use_news,
         advanced_config=DEFAULT_ADVANCED_CONFIG.copy(),
     )
+    return _recommendation_from_chart(chart, price_source, use_news)
+
+
+def _recommendation_from_chart(
+    chart: dict[str, Any],
+    price_source: str,
+    use_news: bool,
+) -> dict[str, Any]:
     actual_prices = chart.get("actual_prices") or []
     future_prices = chart.get("future_predictions") or []
     if not actual_prices or not future_prices:
@@ -132,6 +143,110 @@ def _saved_news_recommendations(symbols: list[str]) -> dict[str, object]:
     return _rank_result(recommendations, len(symbols), 0)
 
 
+def _ensemble_recommendation(
+    symbol: str,
+    predict_steps: int,
+) -> dict[str, Any]:
+    """Combine independent news and price-model evidence with equal weights."""
+    news = news_service.predict_news_buy_decision(symbol)
+    price_source = _price_source(symbol)
+    # News is its own ensemble member. Keeping the price models news-free avoids
+    # counting the same evidence four times, while the multi-model runner makes
+    # every model use the same refreshed candle snapshot.
+    charts = forecaster.run_dashboard_forecasts(
+        symbol=symbol,
+        model_names=ENSEMBLE_MODEL_NAMES,
+        predict_steps=predict_steps,
+        price_csv=None,
+        price_source=price_source,
+        use_news=False,
+        advanced_config=DEFAULT_ADVANCED_CONFIG.copy(),
+    )
+    forecasts = {
+        model_name: _recommendation_from_chart(
+            charts[model_name], price_source, False
+        )
+        for model_name in ENSEMBLE_MODEL_NAMES
+    }
+
+    # Put every member on the same -1..1 directional-conviction scale. Price
+    # models contribute their bullish edge around 50%, confidence-adjusted;
+    # the news member already supplies a directional signal in that range.
+    component_scores = {
+        model_name: (
+            0.0
+            if forecast["forecast_is_naive"]
+            else (
+                (float(forecast["bullish_percent"]) - 50.0)
+                / 50.0
+                * float(forecast["confidence_percent"])
+                / 100.0
+            )
+        )
+        for model_name, forecast in forecasts.items()
+    }
+    component_scores["news"] = (
+        float(news["signal_score"])
+        * float(news["confidence_percent"])
+        / 100.0
+    )
+    ranking_score = sum(component_scores.values()) / len(component_scores)
+    positive_components = sum(score > 0 for score in component_scores.values())
+    confidence = sum(
+        [
+            *(float(item["confidence_percent"]) for item in forecasts.values()),
+            float(news["confidence_percent"]),
+        ]
+    ) / 4.0
+    expected_return = sum(
+        float(item["expected_return_percent"]) for item in forecasts.values()
+    ) / 3.0
+    bullish_percent = sum(
+        float(item["bullish_percent"]) for item in forecasts.values()
+    ) / 3.0
+    directional_accuracy = sum(
+        float(item["directional_accuracy_percent"])
+        for item in forecasts.values()
+    ) / 3.0
+    all_forecasts_naive = all(
+        bool(item["forecast_is_naive"]) for item in forecasts.values()
+    )
+    should_buy = (
+        not all_forecasts_naive
+        and ranking_score > 0
+        and positive_components >= 3
+        and confidence >= 55.0
+    )
+    current_price = sum(
+        float(item["current_price"]) for item in forecasts.values()
+    ) / 3.0
+    target_price = sum(
+        float(item["target_price"]) for item in forecasts.values()
+    ) / 3.0
+
+    return {
+        "decision": "BUY" if should_buy else "DO NOT BUY",
+        "should_buy": should_buy,
+        "ranking_score": round(ranking_score, 4),
+        "xgboost_score": round(component_scores["xgboost"], 4),
+        "gru_score": round(component_scores["gru"], 4),
+        "lstm_score": round(component_scores["lstm"], 4),
+        "news_score": round(component_scores["news"], 4),
+        "news_signal_score": float(news["signal_score"]),
+        "positive_components": positive_components,
+        "component_count": 4,
+        "expected_return_percent": round(expected_return, 4),
+        "confidence_percent": round(confidence, 1),
+        "bullish_percent": round(bullish_percent, 1),
+        "directional_accuracy_percent": round(directional_accuracy, 1),
+        "current_price": current_price,
+        "target_price": target_price,
+        "forecast_is_naive": all_forecasts_naive,
+        "price_source": forecasts["xgboost"]["price_source"],
+        "news_enabled": True,
+    }
+
+
 def _rank_result(
     recommendations: list[dict[str, object]],
     asset_count: int,
@@ -169,7 +284,7 @@ def rank_buy_recommendations(
     normalized = _normalized_symbols(symbols)
     if not normalized:
         raise ValueError("Choose at least one asset to rank.")
-    model_labels = dict(MODEL_CHOICES)
+    model_labels = dict(RECOMMENDATION_MODEL_CHOICES)
     if model_name not in model_labels:
         raise ValueError(f"Unsupported recommendation model '{model_name}'.")
     if model_name == "news_buy":
@@ -187,6 +302,9 @@ def rank_buy_recommendations(
             "use_news": True,
             "predict_steps": None,
         }
+
+    if model_name == "ensemble":
+        use_news = True
 
     refresh_results: dict[str, dict[str, object]] = {
         symbol: {"fetched": 0, "saved": 0} for symbol in normalized
@@ -225,14 +343,17 @@ def rank_buy_recommendations(
             recommendations.append(item)
             continue
         try:
-            item.update(
-                _forecast_recommendation(
-                    symbol,
-                    model_name=model_name,
-                    predict_steps=predict_steps,
-                    use_news=use_news,
+            if model_name == "ensemble":
+                item.update(_ensemble_recommendation(symbol, predict_steps))
+            else:
+                item.update(
+                    _forecast_recommendation(
+                        symbol,
+                        model_name=model_name,
+                        predict_steps=predict_steps,
+                        use_news=use_news,
+                    )
                 )
-            )
         except Exception as exc:
             item["error"] = str(exc)
         recommendations.append(item)
@@ -240,7 +361,7 @@ def rank_buy_recommendations(
     result = _rank_result(recommendations, len(normalized), refreshed_count)
     return {
         **result,
-        "mode": "forecast",
+        "mode": "ensemble" if model_name == "ensemble" else "forecast",
         "model_name": model_name,
         "model_label": model_labels[model_name],
         "use_news": use_news,

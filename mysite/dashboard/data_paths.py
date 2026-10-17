@@ -43,6 +43,7 @@ SUPPORTED_CRYPTO_ASSETS = (
     "UNI",
     "XLM",
     "XRP",
+    "PEPE",
 )
 
 # Keep the dashboard's existing short-symbol convention: each FX symbol maps

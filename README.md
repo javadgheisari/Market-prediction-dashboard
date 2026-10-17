@@ -7,7 +7,8 @@ validation-selected XGBoost portfolio. The repository contains:
 - an improved, leakage-aware command-line forecasting pipeline that combines
   market candles with timestamped asset news;
 - a Django dashboard for selecting an asset and running the improved LSTM or
-  GRU pipeline or the XGBoost portfolio; and
+  GRU pipeline or the XGBoost portfolio, plus a ranked ensemble that combines
+  all three models with the independent news signal; and
 - sample OHLCV datasets for the symbols displayed by the dashboard.
 
 > **Important:** The forecasts are experimental and are not financial advice.
@@ -298,6 +299,19 @@ headlines, and open a confidence-adjusted ranking of the resulting news-only buy
 signals. A later training run automatically includes that news file when
 **Price + crawled news** is selected and its dates overlap the market dataset.
 Select **Price data only** to train while ignoring news.
+
+Use **Build a model + news buy ranking** for the general recommendation flow.
+Choose a market, optionally narrow it to specific assets, and use the default
+ensemble to combine independent news, XGBoost, GRU, and LSTM evidence. Its four
+confidence-adjusted directional signals are weighted equally, and a `BUY`
+requires at least three positive components, 55% average confidence, and a
+validated model edge. Individual XGBoost, Chronos-2, GRU, LSTM, and news-only
+rankings remain available, including the option to refresh news first.
+Assets without automatic price history or usable news remain in the table with
+an actionable error instead of aborting the rest of the market ranking. Use
+**Export ranking CSV** to download the current ranked results, including failed
+assets, without rerunning the selected model or refreshing news.
+
 Each asset page lists saved headlines with publication time, source, link, and
 the crawler's asset-impact score. Pagination provides access to the complete
 saved history, 25 articles at a time.
