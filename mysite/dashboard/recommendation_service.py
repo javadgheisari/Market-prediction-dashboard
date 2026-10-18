@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from typing import Any
 
 from dashboard import forecaster, forexsb_service, news_service
@@ -52,6 +53,105 @@ def _bounded_percent(value: object, default: float = 50.0) -> float:
     if not math.isfinite(number):
         number = default
     return max(0.0, min(100.0, number))
+
+
+def _format_duration(seconds: float) -> str:
+    minutes = max(1, round(seconds / 60.0))
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = round(minutes / 60.0)
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days, remaining_hours = divmod(hours, 24)
+    if remaining_hours == 0:
+        return f"{days} day{'s' if days != 1 else ''}"
+    return (
+        f"{days} day{'s' if days != 1 else ''} "
+        f"{remaining_hours} hour{'s' if remaining_hours != 1 else ''}"
+    )
+
+
+def _trend_details(chart: dict[str, Any]) -> dict[str, Any]:
+    """Estimate the first sustained forecast move and its duration."""
+    actual_prices = [float(value) for value in chart.get("actual_prices") or []]
+    future_prices = [
+        float(value) for value in chart.get("future_predictions") or []
+    ]
+    if not actual_prices or not future_prices:
+        return {
+            "estimated_move_percent": 0.0,
+            "trend_direction": "FLAT",
+            "trend_duration": "Unavailable",
+            "trend_steps": 0,
+            "trend_reversal_expected": False,
+        }
+
+    current_price = actual_prices[-1]
+    tolerance = current_price * 0.0002
+    direction = 0
+    previous = current_price
+    trend_steps = 0
+    for step, price in enumerate(future_prices, start=1):
+        change = price - previous
+        step_direction = 1 if change > tolerance else -1 if change < -tolerance else 0
+        if direction == 0 and step_direction != 0:
+            direction = step_direction
+        elif direction != 0 and step_direction == -direction:
+            break
+        trend_steps = step
+        previous = price
+
+    if trend_steps == 0:
+        trend_steps = 1
+    trend_price = future_prices[min(trend_steps, len(future_prices)) - 1]
+    estimated_move = ((trend_price / current_price) - 1.0) * 100.0
+    if abs(estimated_move) < 0.005:
+        trend_direction = "FLAT"
+    else:
+        trend_direction = "RISE" if estimated_move > 0 else "FALL"
+
+    trend_duration = f"{trend_steps} candle{'s' if trend_steps != 1 else ''}"
+    actual_dates = chart.get("actual_dates") or []
+    future_dates = chart.get("future_dates") or []
+    if actual_dates and len(future_dates) >= trend_steps:
+        try:
+            started_at = datetime.fromisoformat(str(actual_dates[-1]))
+            ends_at = datetime.fromisoformat(str(future_dates[trend_steps - 1]))
+            elapsed = (ends_at - started_at).total_seconds()
+            if elapsed > 0:
+                trend_duration = _format_duration(elapsed)
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "estimated_move_percent": round(estimated_move, 4),
+        "trend_direction": trend_direction,
+        "trend_duration": trend_duration,
+        "trend_steps": trend_steps,
+        "trend_reversal_expected": trend_steps < len(future_prices),
+    }
+
+
+def _mean_forecast_chart(
+    charts: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the mean price path used to describe an ensemble's outlook."""
+    members = [charts[name] for name in ENSEMBLE_MODEL_NAMES]
+    future_paths = [member.get("future_predictions") or [] for member in members]
+    path_length = min(len(path) for path in future_paths)
+    reference = members[0]
+    return {
+        "actual_prices": [
+            sum(float(member["actual_prices"][-1]) for member in members)
+            / len(members)
+        ],
+        "future_predictions": [
+            sum(float(path[index]) for path in future_paths) / len(future_paths)
+            for index in range(path_length)
+        ],
+        "actual_dates": reference.get("actual_dates") or [],
+        "future_dates": (reference.get("future_dates") or [])[:path_length],
+    }
 
 
 def _forecast_recommendation(
@@ -121,6 +221,7 @@ def _recommendation_from_chart(
         "forecast_is_naive": forecast_is_naive,
         "price_source": price_source,
         "news_enabled": bool(metrics.get("news_enabled", use_news)),
+        **_trend_details(chart),
     }
 
 
@@ -187,6 +288,7 @@ def _ensemble_recommendation(
         )
         for model_name in ENSEMBLE_MODEL_NAMES
     }
+    trend_details = _trend_details(_mean_forecast_chart(charts))
 
     # Put every member on the same -1..1 directional-conviction scale. Price
     # models contribute their bullish edge around 50%, confidence-adjusted;
@@ -251,6 +353,7 @@ def _ensemble_recommendation(
         "forecast_is_naive": all_forecasts_naive,
         "price_source": forecasts["xgboost"]["price_source"],
         "news_enabled": True,
+        **trend_details,
     }
 
 
@@ -276,6 +379,7 @@ def _model_ensemble_recommendation(
         )
         for model_name in ENSEMBLE_MODEL_NAMES
     }
+    trend_details = _trend_details(_mean_forecast_chart(charts))
     component_scores = _model_component_scores(forecasts)
     ranking_score = sum(component_scores.values()) / 3.0
     positive_components = sum(score > 0 for score in component_scores.values())
@@ -334,6 +438,7 @@ def _model_ensemble_recommendation(
         "forecast_is_naive": all_forecasts_naive,
         "price_source": forecasts["xgboost"]["price_source"],
         "news_enabled": use_news,
+        **trend_details,
     }
 
 

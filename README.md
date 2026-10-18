@@ -309,6 +309,11 @@ validated model edge. A separate three-model ensemble combines XGBoost, GRU,
 and LSTM with equal weights; crawled news features can be enabled or disabled
 for all three models. Individual XGBoost, Chronos-2, GRU, LSTM, and news-only
 rankings remain available, including the option to refresh news first.
+Forecast-based ranking tables also report the approximate move of the first
+sustained model-path trend and its estimated duration. The duration ends at the
+first meaningful forecast reversal; when none appears, it covers the full
+selected forecast horizon. These values are model estimates rather than
+guaranteed price targets or timing.
 Assets without automatic price history or usable news remain in the table with
 an actionable error instead of aborting the rest of the market ranking. Use
 **Export ranking CSV** to download the current ranked results, including failed

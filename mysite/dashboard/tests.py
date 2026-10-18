@@ -765,6 +765,11 @@ class DashboardViewTests(SimpleTestCase):
                     "forecast_is_naive": False,
                     "price_source": "bundled",
                     "news_enabled": True,
+                    "estimated_move_percent": 2.75,
+                    "trend_direction": "RISE",
+                    "trend_duration": "6 hours",
+                    "trend_steps": 6,
+                    "trend_reversal_expected": True,
                 }
             ],
         }
@@ -783,6 +788,9 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "three equally weighted models")
         self.assertContains(response, "3 / 3")
         self.assertContains(response, "Bundled CSV + news")
+        self.assertContains(response, "Rise 2.75%")
+        self.assertContains(response, "~6 hours")
+        self.assertContains(response, "then reversal")
         self.assertContains(response, 'data-export-mode="model_ensemble"')
         rank_recommendations.assert_called_once_with(
             ["BTC"],
@@ -1186,6 +1194,43 @@ class DashboardViewTests(SimpleTestCase):
 
 
 class RecommendationServiceTests(SimpleTestCase):
+    def test_forecast_reports_move_and_time_until_first_reversal(self):
+        chart = {
+            "actual_prices": [100.0],
+            "future_predictions": [101.0, 102.0, 101.0, 103.0],
+            "actual_dates": ["2026-10-18 10:00"],
+            "future_dates": [
+                "2026-10-18 11:00",
+                "2026-10-18 12:00",
+                "2026-10-18 13:00",
+                "2026-10-18 14:00",
+            ],
+            "metrics": {
+                "bullish_percent": 70.0,
+                "directional_accuracy_percent": 60.0,
+                "forecast_is_naive": False,
+            },
+        }
+
+        result = recommendation_service._recommendation_from_chart(
+            chart, "bundled", False
+        )
+
+        self.assertEqual(result["trend_direction"], "RISE")
+        self.assertEqual(result["estimated_move_percent"], 2.0)
+        self.assertEqual(result["trend_steps"], 2)
+        self.assertEqual(result["trend_duration"], "2 hours")
+        self.assertTrue(result["trend_reversal_expected"])
+
+        chart["future_predictions"] = [99.0, 98.0, 99.0, 97.0]
+        falling = recommendation_service._recommendation_from_chart(
+            chart, "bundled", False
+        )
+        self.assertEqual(falling["trend_direction"], "FALL")
+        self.assertEqual(falling["estimated_move_percent"], -2.0)
+        self.assertEqual(falling["trend_duration"], "2 hours")
+        self.assertTrue(falling["trend_reversal_expected"])
+
     @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecast")
     @patch("dashboard.recommendation_service.has_bundled_data", return_value=True)
     def test_forecast_assets_are_ranked_by_return_and_confidence(
