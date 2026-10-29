@@ -7,9 +7,10 @@ from typing import Any
 
 import pandas as pd
 
-from dashboard.data_paths import DATA_DIR, DATE_COLUMNS, resolve_data_csv
+from dashboard.data_paths import DATE_COLUMNS, resolve_data_csv
 from dashboard.forexsb_service import forexsb_h1_csv
 from dashboard.market_data_service import refreshed_price_csv
+from dashboard.market_repository import write_news_csv
 
 CODE_DIR = Path(__file__).resolve().parents[2] / "code"
 if str(CODE_DIR) not in sys.path:
@@ -81,13 +82,12 @@ def resolve_date_column(path: Path) -> str:
     )
 
 
-def resolve_news_csv(symbol: str) -> Path | None:
-    symbol = symbol.upper()
-    candidates = (
-        DATA_DIR / "news" / f"{symbol}_news.csv",
-        DATA_DIR / "news" / f"{symbol}-USD_news.csv",
-    )
-    return next((path for path in candidates if path.is_file()), None)
+@contextmanager
+def temporary_news_csv(symbol: str):
+    """Export database headlines for the existing CSV-based training pipeline."""
+    with tempfile.TemporaryDirectory(prefix="market-news-") as directory:
+        path = Path(directory) / f"{symbol.upper()}_news.csv"
+        yield path if write_news_csv(symbol, path) else None
 
 
 @contextmanager
@@ -230,33 +230,32 @@ def run_dashboard_forecasts(
         source_context = forexsb_h1_csv(symbol)
     else:
         source_context = nullcontext(price_csv or resolve_data_csv(symbol))
-    news_csv = resolve_news_csv(symbol) if use_news else None
-    if use_news and news_csv is None:
-        raise FileNotFoundError(
-            f"No crawled news file exists for {symbol}. Click 'Crawl latest "
-            f"{symbol} news' first, then train again with news."
-        )
-
     config = advanced_config or {}
     charts = {}
-    with source_context as source_price_csv:
-        with refreshed_price_csv(source_price_csv, symbol) as normalized_price_csv:
-            price_context = (
-                news_overlapping_price_csv(normalized_price_csv, news_csv)
-                if news_csv is not None
-                else nullcontext(normalized_price_csv)
+    with temporary_news_csv(symbol) if use_news else nullcontext(None) as news_csv:
+        if use_news and news_csv is None:
+            raise FileNotFoundError(
+                f"No crawled news exists for {symbol}. Click 'Crawl latest "
+                f"{symbol} news' first, then train again with news."
             )
-            with price_context as training_price_csv:
-                for model_name in model_names:
-                    charts[model_name] = build_plotly_chart(
-                        _train_model(
-                            model_name=model_name,
-                            training_price_csv=training_price_csv,
-                            predict_steps=predict_steps,
-                            news_csv=news_csv,
-                            advanced_config=config,
+        with source_context as source_price_csv:
+            with refreshed_price_csv(source_price_csv, symbol) as normalized_price_csv:
+                price_context = (
+                    news_overlapping_price_csv(normalized_price_csv, news_csv)
+                    if news_csv is not None
+                    else nullcontext(normalized_price_csv)
+                )
+                with price_context as training_price_csv:
+                    for model_name in model_names:
+                        charts[model_name] = build_plotly_chart(
+                            _train_model(
+                                model_name=model_name,
+                                training_price_csv=training_price_csv,
+                                predict_steps=predict_steps,
+                                news_csv=news_csv,
+                                advanced_config=config,
+                            )
                         )
-                    )
     return charts
 
 

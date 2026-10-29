@@ -9,7 +9,7 @@ validation-selected XGBoost portfolio. The repository contains:
 - a Django dashboard for selecting an asset and running the improved LSTM or
   GRU pipeline or the XGBoost portfolio, plus a ranked ensemble that combines
   all three models with the independent news signal; and
-- sample OHLCV datasets for the symbols displayed by the dashboard.
+- local news and context datasets plus access to market-price feeds.
 
 > **Important:** The forecasts are experimental and are not financial advice.
 > Historical test results do not guarantee future performance.
@@ -19,6 +19,7 @@ validation-selected XGBoost portfolio. The repository contains:
 - Python 3.10 is recommended. The pinned TensorFlow 2.10 dependency does not
   support newer Python releases such as Python 3.11.
 - `pip` and `venv`.
+- PostgreSQL with an existing `marketdb` database and a user allowed to create tables.
 - Enough memory and disk space to train TensorFlow models. A GPU is optional;
   TensorFlow can train on a CPU, but it will be slower.
 - A graphical desktop only if CSV paths are omitted and the optional file
@@ -62,8 +63,9 @@ also be long enough for the configured input window, forecast horizon, and
 train/validation/test partitions. If it is too short, reduce `--window` or
 `--forecast-steps`, or provide more observations.
 
-Bundled dashboard data is stored in `mysite/dashboard/data/new/`. Additional
-historical data can be obtained from the
+Place optional historical price CSVs under `data/` by market and asset. The
+current `data/` directory contains news and context observations, but no
+price history. Additional historical data can be obtained from the
 [Dukascopy historical data feed](https://www.dukascopy.com/plugins/fxMarketWatch/?historical_data).
 
 ### News CSV
@@ -107,9 +109,8 @@ horizon, then returns either `BUY` or `DO NOT BUY`. A buy requires both a
 positive weighted signal and sufficient consistent evidence. This output is an
 experimental research signal, not financial advice.
 
-See [`data/news/gold_news_sample.csv`](data/news/gold_news_sample.csv) for a
-complete example. Its dates must be adjusted or paired with market data from
-the same period before training.
+The standalone trainers can read news CSVs from `data/news/`. Their publication
+dates must overlap the price history used for training.
 
 ### Collect current news
 
@@ -264,14 +265,29 @@ report explicitly says that no horizon-matched score is available.
 ## Run the Django dashboard
 
 The dashboard uses the same improved pipeline as `improved_lstm.py` and
-`improved_gru.py`. Start it from the `mysite` directory:
+`improved_gru.py`. Configure PostgreSQL from the repository root, then apply
+migrations and import the bundled news and context observations:
 
 ```bash
 source venv/bin/activate
+cp .env.example .env
+# Edit .env with your local PostgreSQL username and password.
 cd mysite
 python manage.py migrate
+python manage.py import_market_data
 python manage.py runserver
 ```
+
+The local `.env` file is ignored by Git. Django reads `POSTGRES_DB`,
+`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` from
+it; shell environment variables take precedence. The import command is safe
+to rerun: it updates rows with the same article ID or context observation key.
+The dashboard reads and writes headlines in PostgreSQL. Historical price CSVs
+and downloaded price feeds remain input files for forecasting; there are no
+bundled price histories in the current `data/` directory. The three
+`data/context/` files are imported into `dashboard_contextobservation` for
+future use. Model checkpoints and plots remain files under `models/` and
+`plots/`.
 
 Open <http://127.0.0.1:8000/>, select an asset, choose the recommended XGBoost
 portfolio, Chronos-2, Improved GRU, or Improved LSTM, and enter the forecast
@@ -314,11 +330,13 @@ one-hour candles. Where available, the export combines deeper ForexSB history
 with newer BiQuote candles; other assets use BiQuote's recent H1 history.
 
 Use **Crawl news** beside an asset, or on its forecast page, to fetch the latest
-seven days of relevant RSS headlines into `data/news/<SYMBOL>_news.csv`. Existing
-rows are retained and deduplicated. Use **Refresh news & rank buys** on a market
+seven days of relevant RSS headlines into PostgreSQL. Existing rows are
+retained and deduplicated. The standalone `code/news_crawler.py` still writes
+CSV files; run `python manage.py import_market_data` after using it to sync
+those files. Use **Refresh news & rank buys** on a market
 card to clear the saved news for every asset in that market, crawl fresh
 headlines, and open a confidence-adjusted ranking of the resulting news-only buy
-signals. A later training run automatically includes that news file when
+signals. A later training run automatically includes those saved headlines when
 **Price + crawled news** is selected and its dates overlap the market dataset.
 Select **Price data only** to train while ignoring news.
 

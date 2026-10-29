@@ -1,4 +1,5 @@
 /venv
+/.env
 __pycache__/
 *.py[cod]
 /data/*
@@ -16,7 +17,6 @@ __pycache__/
 /mysite/db.sqlite3
 /mysite/mysite/__pycache__
 /mysite/dashboard/__pycache__
-/mysite/dashboard/migrations
 /mysite/dashboard/models
 /open-plot-app
 /plots

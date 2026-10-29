@@ -233,6 +233,8 @@ def crawl_asset_news(
     session: requests.Session | None = None,
     scorer: str | None = None,
     openai_model: str | None = None,
+    existing_rows: list[dict[str, str]] | None = None,
+    persist: bool = True,
 ) -> dict[str, object]:
     """Fetch, score, merge, and save recent news for one configured asset."""
     if days < 1 or max_per_asset < 1 or timeout <= 0:
@@ -284,18 +286,19 @@ def crawl_asset_news(
         for row in rows:
             row.update(scores[row["article_id"]])
     path = output_dir / f"{normalized_symbol}_news.csv"
-    merged = merge_rows(
-        read_existing(path),
-        rows,
-    )
-    write_rows(path, merged)
-    return {
+    merged = merge_rows(read_existing(path) if existing_rows is None else existing_rows, rows)
+    if persist:
+        write_rows(path, merged)
+    result = {
         "symbol": normalized_symbol,
         "fetched": len(articles),
         "saved": len(merged),
         "path": path,
         "scorer": resolved_scorer,
     }
+    if not persist:
+        result["rows"] = merged
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:

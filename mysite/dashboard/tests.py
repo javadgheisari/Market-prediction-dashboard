@@ -8,7 +8,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 import pandas as pd
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
@@ -23,11 +23,14 @@ from dashboard.forecaster import (
 )
 from dashboard.news_service import (
     clear_asset_news,
+    crawl_asset_news,
     load_asset_news,
     predict_news_buy_decision,
     refresh_market_news,
 )
 from dashboard.templatetags.price_display import approximate_price
+from dashboard.market_repository import import_context_file, import_news_file, write_news_csv
+from dashboard.models import ContextObservation, NewsArticle
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
 
@@ -615,7 +618,7 @@ class PriceExportServiceTests(SimpleTestCase):
         self.assertEqual(result["Close"].tolist(), [100.0])
         download_history.assert_called_once_with("USOIL")
 
-class DashboardViewTests(SimpleTestCase):
+class DashboardViewTests(TestCase):
     def test_dashboard_lists_available_asset(self):
         response = self.client.get(reverse("dashboard"))
         self.assertEqual(response.status_code, 200)
@@ -1839,7 +1842,7 @@ class ChartAdapterTests(SimpleTestCase):
         self.assertNotIn("Unnamed: 3", frame)
 
 
-class NewsDisplayTests(SimpleTestCase):
+class NewsDisplayTests(TestCase):
     @patch("dashboard.news_service.predict_news_buy_decision")
     @patch("dashboard.news_service.crawl_asset_news")
     @patch("dashboard.news_service.clear_asset_news")
@@ -1933,156 +1936,113 @@ class NewsDisplayTests(SimpleTestCase):
         self.assertEqual(result["recommendations"][1]["error"], "Feed unavailable")
         predict_news.assert_called_once_with("GOOD")
 
+    def _article(self, symbol, identifier, published, headline, impact, **extra):
+        defaults = {
+            "relevance": 1, "importance": 1, "source_quality": 1,
+            "confidence": 1, "novelty": 1, "impact_horizon_hours": 48,
+        }
+        defaults.update(extra)
+        return NewsArticle.objects.create(
+            symbol=symbol, article_id=identifier, published_at=published,
+            headline=headline, asset_impact=impact, **defaults,
+        )
+
     def test_news_only_model_buys_on_strong_consistent_recent_signals(self):
-        with tempfile.TemporaryDirectory() as directory:
-            news_dir = Path(directory) / "news"
-            news_dir.mkdir()
-            path = news_dir / "BTC_news.csv"
-            with path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=[
-                        "published_at",
-                        "headline",
-                        "asset_impact",
-                        "relevance",
-                        "importance",
-                        "source_quality",
-                        "confidence",
-                        "novelty",
-                        "impact_horizon_hours",
-                    ],
-                )
-                writer.writeheader()
-                for index in range(3):
-                    writer.writerow(
-                        {
-                            "published_at": f"2026-10-08T0{index}:00:00+00:00",
-                            "headline": f"Bullish update {index}",
-                            "asset_impact": "0.8",
-                            "relevance": "1",
-                            "importance": "1",
-                            "source_quality": "1",
-                            "confidence": "1",
-                            "novelty": "1",
-                            "impact_horizon_hours": "48",
-                        }
-                    )
-
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                result = predict_news_buy_decision(
-                    "BTC", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
-                )
-
+        for index in range(3):
+            self._article(
+                "BTC", str(index), datetime(2026, 10, 8, index, tzinfo=timezone.utc),
+                f"Bullish update {index}", 0.8,
+            )
+        result = predict_news_buy_decision(
+            "BTC", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
+        )
         self.assertEqual(result["decision"], "BUY")
         self.assertTrue(result["should_buy"])
         self.assertEqual(result["articles_analyzed"], 3)
         self.assertAlmostEqual(result["signal_score"], 0.8)
 
     def test_news_only_model_rejects_stale_signals(self):
-        with tempfile.TemporaryDirectory() as directory:
-            news_dir = Path(directory) / "news"
-            news_dir.mkdir()
-            path = news_dir / "ETH_news.csv"
-            path.write_text(
-                "published_at,headline,asset_impact,impact_horizon_hours\n"
-                "2026-10-01T00:00:00+00:00,Old rally,1,24\n",
-                encoding="utf-8",
-            )
-
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                with self.assertRaisesRegex(ValueError, "No active news signals"):
-                    predict_news_buy_decision(
-                        "ETH", now=datetime(2026, 10, 8, tzinfo=timezone.utc)
-                    )
+        self._article(
+            "ETH", "old", datetime(2026, 10, 1, tzinfo=timezone.utc),
+            "Old rally", 1, impact_horizon_hours=24,
+        )
+        with self.assertRaisesRegex(ValueError, "No active news signals"):
+            predict_news_buy_decision("ETH", now=datetime(2026, 10, 8, tzinfo=timezone.utc))
 
     def test_news_only_model_does_not_buy_on_bearish_signals(self):
-        with tempfile.TemporaryDirectory() as directory:
-            news_dir = Path(directory) / "news"
-            news_dir.mkdir()
-            path = news_dir / "XAU_news.csv"
-            path.write_text(
-                "published_at,headline,asset_impact,impact_horizon_hours\n"
-                "2026-10-08T00:00:00+00:00,Bearish one,-0.7,48\n"
-                "2026-10-08T01:00:00+00:00,Bearish two,-0.5,48\n"
-                "2026-10-08T02:00:00+00:00,Bearish three,-0.8,48\n",
-                encoding="utf-8",
+        for index, impact in enumerate((-0.7, -0.5, -0.8)):
+            self._article(
+                "XAU", str(index), datetime(2026, 10, 8, index, tzinfo=timezone.utc),
+                f"Bearish {index}", impact,
             )
-
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                result = predict_news_buy_decision(
-                    "XAU", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
-                )
-
+        result = predict_news_buy_decision(
+            "XAU", now=datetime(2026, 10, 8, 3, tzinfo=timezone.utc)
+        )
         self.assertEqual(result["decision"], "DO NOT BUY")
         self.assertFalse(result["should_buy"])
         self.assertLess(result["signal_score"], 0)
 
     def test_clear_news_deletes_only_requested_asset(self):
-        with tempfile.TemporaryDirectory() as directory:
-            news_dir = Path(directory) / "news"
-            news_dir.mkdir()
-            btc_path = news_dir / "BTC_news.csv"
-            eth_path = news_dir / "ETH_news.csv"
-            btc_path.write_text("headline\nBitcoin update\n", encoding="utf-8")
-            eth_path.write_text("headline\nEthereum update\n", encoding="utf-8")
+        published = datetime(2026, 10, 8, tzinfo=timezone.utc)
+        self._article("BTC", "btc", published, "Bitcoin update", 0)
+        self._article("ETH", "eth", published, "Ethereum update", 0)
+        self.assertTrue(clear_asset_news("btc"))
+        self.assertFalse(NewsArticle.objects.filter(symbol="BTC").exists())
+        self.assertTrue(NewsArticle.objects.filter(symbol="ETH").exists())
 
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                removed = clear_asset_news("btc")
-
-            self.assertTrue(removed)
-            self.assertFalse(btc_path.exists())
-            self.assertTrue(eth_path.exists())
-
-    def test_clear_news_reports_when_asset_has_no_saved_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                removed = clear_asset_news("BTC")
-
-        self.assertFalse(removed)
+    def test_clear_news_reports_when_asset_has_no_saved_rows(self):
+        self.assertFalse(clear_asset_news("BTC"))
 
     def test_load_news_sorts_latest_first_and_rejects_unsafe_url(self):
-        with tempfile.TemporaryDirectory() as directory:
-            news_dir = Path(directory) / "news"
-            news_dir.mkdir()
-            path = news_dir / "BTC_news.csv"
-            with path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(
-                    handle,
-                    fieldnames=[
-                        "published_at",
-                        "headline",
-                        "asset_impact",
-                        "source",
-                        "url",
-                    ],
-                )
-                writer.writeheader()
-                writer.writerows(
-                    [
-                        {
-                            "published_at": "2026-09-01T10:00:00+00:00",
-                            "headline": "Older",
-                            "asset_impact": "-0.5",
-                            "source": "One",
-                            "url": "https://example.com/older",
-                        },
-                        {
-                            "published_at": "2026-09-02T10:00:00+00:00",
-                            "headline": "Newer",
-                            "asset_impact": "0.7",
-                            "source": "Two",
-                            "url": "javascript:alert(1)",
-                        },
-                    ]
-                )
-
-            with patch("dashboard.news_service.DATA_DIR", Path(directory)):
-                result = load_asset_news("BTC")
-
+        self._article(
+            "BTC", "older", datetime(2026, 9, 1, 10, tzinfo=timezone.utc),
+            "Older", -0.5, source="One", url="https://example.com/older",
+        )
+        self._article(
+            "BTC", "newer", datetime(2026, 9, 2, 10, tzinfo=timezone.utc),
+            "Newer", 0.7, source="Two", url="javascript:alert(1)",
+        )
+        result = load_asset_news("BTC")
         self.assertEqual(result["total"], 2)
         self.assertEqual(result["rows"][0]["headline"], "Newer")
-        self.assertEqual(
-            result["rows"][0]["published_iso"], "2026-09-02T10:00:00+00:00"
-        )
+        self.assertEqual(result["rows"][0]["published_iso"], "2026-09-02T10:00:00+00:00")
         self.assertEqual(result["rows"][0]["url"], "")
+
+    def test_csv_import_is_idempotent_and_news_exports_for_training(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            news_path = root / "BTC_news.csv"
+            news_path.write_text(
+                "published_at,headline,asset_impact,relevance,importance,source_quality,confidence,novelty,impact_horizon_hours,event_type,scoring_method,source,url,article_id\n"
+                "2026-10-08T00:00:00+00:00,Example,0.5,0.7,0.5,0.6,0.35,0.5,48,other,lexical,Source,https://example.com,abc\n",
+                encoding="utf-8",
+            )
+            context_path = root / "BTC_context.csv"
+            context_path.write_text(
+                "available_at,feature,value,source,max_age_hours\n"
+                "2026-10-08T00:00:00+00:00,tvl,123,defillama,96\n",
+                encoding="utf-8",
+            )
+            for _ in range(2):
+                self.assertEqual(import_news_file(news_path), 1)
+                self.assertEqual(import_context_file(context_path), 1)
+            self.assertEqual(NewsArticle.objects.filter(symbol="BTC").count(), 1)
+            self.assertEqual(ContextObservation.objects.filter(symbol="BTC").count(), 1)
+            exported = root / "exported.csv"
+            self.assertTrue(write_news_csv("BTC", exported))
+            self.assertEqual(list(csv.DictReader(exported.open()))[0]["article_id"], "abc")
+
+    def test_dashboard_crawl_saves_headlines_to_database(self):
+        from news_crawler import Article
+
+        article = Article(
+            datetime.now(timezone.utc), "Bitcoin rises", "Example",
+            "https://example.com/bitcoin-rises",
+        )
+        with patch("news_crawler.fetch_feed", return_value=[article]):
+            result = crawl_asset_news("BTC")
+
+        self.assertEqual(result["fetched"], 1)
+        self.assertEqual(result["saved"], 1)
+        self.assertIsNone(result["path"])
+        self.assertEqual(NewsArticle.objects.get(symbol="BTC").headline, "Bitcoin rises")

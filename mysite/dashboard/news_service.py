@@ -1,5 +1,4 @@
 import sys
-import csv
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,7 +6,8 @@ from urllib.parse import urlparse
 
 from django.core.paginator import Paginator
 
-from dashboard.data_paths import DATA_DIR
+from dashboard.market_repository import news_as_rows, save_news_rows
+from dashboard.models import NewsArticle
 
 
 CODE_DIR = Path(__file__).resolve().parents[2] / "code"
@@ -15,25 +15,24 @@ if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
 
-def asset_news_path(symbol: str) -> Path:
-    return DATA_DIR / "news" / f"{symbol.upper()}_news.csv"
-
-
 def crawl_asset_news(symbol: str) -> dict[str, object]:
     """Run the project's RSS crawler for one dashboard asset."""
     from news_crawler import crawl_asset_news as crawl
 
-    return crawl(symbol, days=7, max_per_asset=100, timeout=20.0)
+    result = crawl(
+        symbol, days=7, max_per_asset=100, timeout=20.0,
+        existing_rows=news_as_rows(symbol), persist=False,
+    )
+    save_news_rows(symbol, result.pop("rows"))
+    result["saved"] = NewsArticle.objects.filter(symbol=symbol.upper()).count()
+    result["path"] = None
+    return result
 
 
 def clear_asset_news(symbol: str) -> bool:
-    """Delete locally saved headlines for one asset, if they exist."""
-    path = asset_news_path(symbol)
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return False
-    return True
+    """Delete saved headlines for one asset."""
+    deleted, _ = NewsArticle.objects.filter(symbol=symbol.upper()).delete()
+    return bool(deleted)
 
 
 def refresh_market_news(symbols: list[str] | tuple[str, ...]) -> dict[str, object]:
@@ -134,14 +133,11 @@ def predict_news_buy_decision(
     symbol: str, *, now: datetime | None = None
 ) -> dict[str, object]:
     """Return a buy/no-buy decision using saved news signals only."""
-    path = asset_news_path(symbol)
-    if not path.is_file():
+    rows = news_as_rows(symbol)
+    if not rows:
         raise FileNotFoundError(
-            f"No crawled news file exists for {symbol.upper()}. Crawl news first."
+            f"No crawled news exists for {symbol.upper()}. Crawl news first."
         )
-
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
 
     current_time = now or datetime.now(timezone.utc)
     if current_time.tzinfo is None:
@@ -243,12 +239,12 @@ def load_asset_news(
     symbol: str, page: int | str = 1, per_page: int = 25
 ) -> dict[str, object]:
     """Load one page of locally saved headlines for dashboard display."""
-    path = asset_news_path(symbol)
-    if not path.is_file():
+    queryset = NewsArticle.objects.filter(symbol=symbol.upper())
+    if not queryset.exists():
         return {
             "rows": [],
             "total": 0,
-            "path": path,
+            "path": None,
             "page": 1,
             "num_pages": 1,
             "start_index": 0,
@@ -258,42 +254,29 @@ def load_asset_news(
             "page_range": [1],
         }
 
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-
-    rows.sort(key=lambda row: row.get("published_at", ""), reverse=True)
-    paginator = Paginator(rows, per_page)
+    paginator = Paginator(queryset, per_page)
     page_obj = paginator.get_page(page)
     display_rows = []
-    for row in page_obj.object_list:
-        raw_url = row.get("url", "")
+    for article in page_obj.object_list:
+        raw_url = article.url
         parsed_url = urlparse(raw_url)
         safe_url = raw_url if parsed_url.scheme in {"http", "https"} else ""
-        raw_date = row.get("published_at", "")
-        try:
-            published_at = datetime.fromisoformat(
-                raw_date.replace("Z", "+00:00")
-            ).strftime("%Y-%m-%d %H:%M UTC")
-        except ValueError:
-            published_at = raw_date
-        try:
-            impact = float(row.get("asset_impact", 0) or 0)
-        except ValueError:
-            impact = 0.0
+        raw_date = article.published_at.isoformat(timespec="seconds")
+        published_at = article.published_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         display_rows.append(
             {
                 "published_iso": raw_date,
                 "published_at": published_at,
-                "headline": row.get("headline", ""),
-                "source": row.get("source", ""),
+                "headline": article.headline,
+                "source": article.source,
                 "url": safe_url,
-                "impact": impact,
+                "impact": article.asset_impact,
             }
         )
     return {
         "rows": display_rows,
-        "total": len(rows),
-        "path": path,
+        "total": paginator.count,
+        "path": None,
         "page": page_obj.number,
         "num_pages": paginator.num_pages,
         "start_index": page_obj.start_index(),
