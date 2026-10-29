@@ -30,7 +30,7 @@
         <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
             <div>
                 <h2 class="h5 mb-1">News-based recommendations</h2>
-                <small class="text-white-50">Ranking score = weighted news signal × model confidence. Negative scores rank below positive scores.</small>
+                <small class="text-white-50">Ranking score = weighted news signal × model confidence. News alone cannot estimate buying or selling prices.</small>
             </div>
             <div class="recommendation-export-actions">
                 <span class="asset-count">{{ cleared_count }} news files reset</span>
@@ -50,6 +50,7 @@
                         <th scope="col">Rank</th>
                         <th scope="col">Asset</th>
                         <th scope="col">Recommendation</th>
+                        <th scope="col">Approx. price ranges</th>
                         <th scope="col">Ranking score</th>
                         <th scope="col">News signal</th>
                         <th scope="col">Confidence</th>
@@ -63,10 +64,11 @@
                         <td>{% if item.rank %}<span class="rank-pill">#{{ item.rank }}</span>{% else %}&mdash;{% endif %}</td>
                         <td><a class="link-light fw-bold" href="{% url 'predict' symbol_name=item.symbol %}">{{ item.symbol }}</a></td>
                         {% if item.error %}
-                        <td colspan="5"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
+                        <td colspan="6"><span class="text-warning">Unavailable:</span> {{ item.error }}</td>
                         <td>{{ item.fetched }} fetched</td>
                         {% else %}
                         <td><span class="news-decision-badge recommendation-badge {% if item.should_buy %}is-buy{% else %}is-no-buy{% endif %}">{{ item.decision }}</span></td>
+                        {% include '_recommendation_price_range.html' with mode='news_only' %}
                         <td class="fw-bold {% if item.ranking_score > 0 %}text-success{% elif item.ranking_score < 0 %}text-danger{% endif %}">{{ item.ranking_score|floatformat:3 }}</td>
                         <td class="{% if item.signal_score > 0 %}text-success{% elif item.signal_score < 0 %}text-danger{% endif %}">{{ item.signal_score|floatformat:2 }}</td>
                         <td>{{ item.confidence_percent|floatformat:1 }}%</td>
@@ -75,7 +77,7 @@
                         {% endif %}
                     </tr>
                     {% empty %}
-                    <tr><td colspan="8" class="text-center text-white-50 py-5">No assets were available to rank.</td></tr>
+                    <tr><td colspan="9" class="text-center text-white-50 py-5">No assets were available to rank.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>

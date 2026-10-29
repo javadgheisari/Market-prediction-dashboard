@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <main class="container py-5">
@@ -13,6 +14,14 @@
     <div class="d-flex align-items-end justify-content-between mb-3">
         <div><div class="card-kicker mb-1">Markets</div><h2 class="h4 mb-0">Choose an asset</h2></div>
         <span class="small text-white-50 d-none d-sm-inline">Select a symbol to configure a forecast</span>
+    </div>
+    <div class="asset-search mb-3" role="search">
+        <label class="form-label small text-white-50" for="asset-search-input">Find a symbol or market</label>
+        <div class="d-flex gap-2">
+            <input class="form-control" id="asset-search-input" type="search" placeholder="Search BTC, crypto, forex…" autocomplete="off">
+            <button class="btn btn-outline-light" id="asset-search-clear" type="button" hidden>Clear</button>
+        </div>
+        <p class="small text-white-50 mt-2 mb-0" id="asset-search-status" aria-live="polite"></p>
     </div>
     <div class="row g-4 justify-content-center">
         {% for category, symbols in asset_groups.items %}
@@ -34,7 +43,7 @@
                 <div class="card-body pt-1">
                     <div class="{% if category == 'Cryptocurrency' %}crypto-asset-grid{% endif %}">
                         {% for symbol in symbols %}
-                        <div class="asset-row" role="group" aria-label="Actions for {{ symbol }}">
+                        <div class="asset-row" role="group" aria-label="Actions for {{ symbol }}" data-asset-symbol="{{ symbol }}">
                             <a class="asset-link" href="{% url 'predict' symbol_name=symbol %}"><span>{{ symbol }}</span><small>Forecast &rarr;</small></a>
                             <div class="asset-live-price" data-live-price-symbol="{{ symbol }}" aria-live="polite">
                                 <span class="live-price-indicator" aria-hidden="true"></span>
@@ -60,6 +69,7 @@
         </section>
         {% endfor %}
     </div>
+    <div class="alert alert-info mt-3" id="asset-search-empty" role="status" hidden>No assets match your search.</div>
     {% else %}
     <div class="alert alert-warning">
         No market CSV files were found under the project <code>data/</code> directory.
@@ -70,6 +80,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'dashboard/js/asset_search.js' %}"></script>
 <script>
     const latestPricesUrl = "{% url 'latest_prices' %}";
 

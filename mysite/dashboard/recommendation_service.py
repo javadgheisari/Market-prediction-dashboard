@@ -132,6 +132,58 @@ def _trend_details(chart: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _trade_ranges(
+    chart: dict[str, Any], candidate_buy: bool
+) -> dict[str, float | str | None]:
+    """Use forecast bands only when they support a positive spread."""
+    empty = {
+        "buy_range_low": None,
+        "buy_range_high": None,
+        "sell_range_low": None,
+        "sell_range_high": None,
+        "trade_range_note": None,
+    }
+    if not candidate_buy:
+        return empty
+
+    unavailable = {**empty, "trade_range_note": "Forecast price bands are unavailable."}
+
+    predictions = chart.get("future_predictions") or []
+    lower = chart.get("future_lower") or []
+    upper = chart.get("future_upper") or []
+    if not predictions or len(lower) != len(predictions) or len(upper) != len(predictions):
+        return unavailable
+    try:
+        prices = [float(value) for value in predictions]
+        bounds = [(float(low), float(high)) for low, high in zip(lower, upper)]
+    except (TypeError, ValueError):
+        return unavailable
+    if any(not math.isfinite(price) or price <= 0 for price in prices):
+        return unavailable
+    if any(
+        not math.isfinite(low)
+        or not math.isfinite(high)
+        or low <= 0
+        or low > high
+        for low, high in bounds
+    ):
+        return unavailable
+
+    peak_index = max(range(len(prices)), key=prices.__getitem__)
+    if bounds[peak_index][1] <= bounds[0][0]:
+        return {
+            **empty,
+            "trade_range_note": "Forecast bands imply no positive spread between entry and exit.",
+        }
+    return {
+        "buy_range_low": bounds[0][0],
+        "buy_range_high": bounds[0][1],
+        "sell_range_low": bounds[peak_index][0],
+        "sell_range_high": bounds[peak_index][1],
+        "trade_range_note": None,
+    }
+
+
 def _mean_forecast_chart(
     charts: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
@@ -140,6 +192,16 @@ def _mean_forecast_chart(
     future_paths = [member.get("future_predictions") or [] for member in members]
     path_length = min(len(path) for path in future_paths)
     reference = members[0]
+
+    def mean_band(key: str) -> list[float]:
+        paths = [member.get(key) or [] for member in members]
+        if any(len(path) < path_length for path in paths):
+            return []
+        return [
+            sum(float(path[index]) for path in paths) / len(paths)
+            for index in range(path_length)
+        ]
+
     return {
         "actual_prices": [
             sum(float(member["actual_prices"][-1]) for member in members)
@@ -149,6 +211,8 @@ def _mean_forecast_chart(
             sum(float(path[index]) for path in future_paths) / len(future_paths)
             for index in range(path_length)
         ],
+        "future_lower": mean_band("future_lower"),
+        "future_upper": mean_band("future_upper"),
         "actual_dates": reference.get("actual_dates") or [],
         "future_dates": (reference.get("future_dates") or [])[:path_length],
     }
@@ -207,6 +271,8 @@ def _recommendation_from_chart(
         and bullish_percent >= 55.0
         and confidence >= 55.0
     )
+    trade_ranges = _trade_ranges(chart, should_buy)
+    should_buy = should_buy and trade_ranges["buy_range_low"] is not None
 
     return {
         "decision": "BUY" if should_buy else "DO NOT BUY",
@@ -221,6 +287,7 @@ def _recommendation_from_chart(
         "forecast_is_naive": forecast_is_naive,
         "price_source": price_source,
         "news_enabled": bool(metrics.get("news_enabled", use_news)),
+        **trade_ranges,
         **_trend_details(chart),
     }
 
@@ -288,7 +355,8 @@ def _ensemble_recommendation(
         )
         for model_name in ENSEMBLE_MODEL_NAMES
     }
-    trend_details = _trend_details(_mean_forecast_chart(charts))
+    mean_chart = _mean_forecast_chart(charts)
+    trend_details = _trend_details(mean_chart)
 
     # Put every member on the same -1..1 directional-conviction scale. Price
     # models contribute their bullish edge around 50%, confidence-adjusted;
@@ -326,6 +394,8 @@ def _ensemble_recommendation(
         and positive_components >= 3
         and confidence >= 55.0
     )
+    trade_ranges = _trade_ranges(mean_chart, should_buy)
+    should_buy = should_buy and trade_ranges["buy_range_low"] is not None
     current_price = sum(
         float(item["current_price"]) for item in forecasts.values()
     ) / 3.0
@@ -353,6 +423,7 @@ def _ensemble_recommendation(
         "forecast_is_naive": all_forecasts_naive,
         "price_source": forecasts["xgboost"]["price_source"],
         "news_enabled": True,
+        **trade_ranges,
         **trend_details,
     }
 
@@ -379,7 +450,8 @@ def _model_ensemble_recommendation(
         )
         for model_name in ENSEMBLE_MODEL_NAMES
     }
-    trend_details = _trend_details(_mean_forecast_chart(charts))
+    mean_chart = _mean_forecast_chart(charts)
+    trend_details = _trend_details(mean_chart)
     component_scores = _model_component_scores(forecasts)
     ranking_score = sum(component_scores.values()) / 3.0
     positive_components = sum(score > 0 for score in component_scores.values())
@@ -395,6 +467,8 @@ def _model_ensemble_recommendation(
         and positive_components >= 2
         and confidence >= 55.0
     )
+    trade_ranges = _trade_ranges(mean_chart, should_buy)
+    should_buy = should_buy and trade_ranges["buy_range_low"] is not None
 
     return {
         "decision": "BUY" if should_buy else "DO NOT BUY",
@@ -438,6 +512,7 @@ def _model_ensemble_recommendation(
         "forecast_is_naive": all_forecasts_naive,
         "price_source": forecasts["xgboost"]["price_source"],
         "news_enabled": use_news,
+        **trade_ranges,
         **trend_details,
     }
 

@@ -273,7 +273,14 @@ controls; fields that do not apply to the selected model are hidden. One step is
 in the selected CSV (one hour for the bundled hourly datasets). The request
 trains a model, so it can take several minutes on a CPU. The result page shows
 actual prices, one-step test predictions, future predictions, error metrics,
-directional accuracy, and estimated bullish/bearish probabilities.
+directional accuracy, and estimated bullish/bearish probabilities. It also
+shows the latest price candle, typical candle interval, forecast end time, and
+selected history source so the forecast horizon has clear timing context.
+
+Use the market search to filter symbols or entire market categories. After a
+forecast completes, **Download forecast CSV** exports the actual, test, and
+future series with available forecast bounds and Tehran timestamps. It uses the
+result already on the page and does not train the model again.
 
 The dashboard includes the seven USD FX majors: AUD (`AUDUSD`), CAD (`USDCAD`),
 CHF (`USDCHF`), EUR (`EURUSD`), GBP (`GBPUSD`), JPY (`USDJPY`), and NZD
@@ -281,6 +288,11 @@ CHF (`USDCHF`), EUR (`EURUSD`), GBP (`GBPUSD`), JPY (`USDJPY`), and NZD
 crude (USOIL). FX majors, metals, and Brent can download one-hour ForexSB
 history automatically. WTI requires an uploaded historical CSV; BiQuote adds
 its latest closed candles before training.
+
+Algorand (ALGO), MultiversX (EGLD), and VeChain (VET) are available in the
+cryptocurrency market. Their automatic H1 history comes from ForexSB's USDT
+feeds, and BiQuote's matching USDT candles refresh it before forecasting or
+CSV export. Other listed altcoins also use their USDT pairs for live prices.
 
 For historical prices, select **Use project /data CSV** to use the bundled file
 for that asset, or **Choose CSV from this computer** to upload a CSV of up to
@@ -314,6 +326,14 @@ sustained model-path trend and its estimated duration. The duration ends at the
 first meaningful forecast reversal; when none appears, it covers the full
 selected forecast horizon. These values are model estimates rather than
 guaranteed price targets or timing.
+For forecast-based BUY rows, the ranking also shows approximate buy and sell
+price ranges. The buy range is the lower-to-upper forecast band for the next
+candle; the sell range is the band at the highest projected candle within the
+selected horizon. Ensemble ranges average the three price models' bands.
+Price-model BUY signals require valid bands with a possible positive spread
+between entry and exit; otherwise the ranking reports DO NOT BUY and explains why.
+News-only rankings do not provide numeric price ranges because headlines alone
+do not produce price forecasts. The CSV export includes the four range bounds.
 Assets without automatic price history or usable news remain in the table with
 an actionable error instead of aborting the rest of the market ranking. Use
 **Export ranking CSV** to download the current ranked results, including failed

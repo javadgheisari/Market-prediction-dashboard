@@ -92,6 +92,7 @@ h1, h2, h3, h4, h5, h6, .brand { font-family: "Manrope", sans-serif; letter-spac
 .market-ranking-actions { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
 .market-ranking-actions form { display: flex; }
 .asset-row { display: grid; grid-template-columns: 1fr; gap: .4rem; padding: .55rem; margin-bottom: .55rem; background: rgba(5,14,26,.46); border: 1px solid transparent; border-radius: 12px; transition: background .2s, border-color .2s; }
+.asset-row[hidden], .market-group[hidden], #asset-search-clear[hidden], #asset-search-empty[hidden] { display: none !important; }
 .asset-row:hover { background: rgba(22,40,64,.8); border-color: var(--app-border); }
 .asset-link { display: flex; align-items: center; justify-content: space-between; color: var(--app-text); text-decoration: none; font-weight: 700; padding: .35rem .45rem; }
 .asset-link:hover { color: #74caff; }

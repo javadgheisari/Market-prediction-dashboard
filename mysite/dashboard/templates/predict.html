@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block content %}
 <main class="container py-4 py-lg-5">
@@ -91,9 +92,11 @@
             <div class="result-toolbar d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                 <div><div class="card-kicker">Forecast result</div><h2 class="h5 mb-0 mt-1">{{ symbol_name }} outlook</h2></div>
                 <div class="d-flex flex-wrap gap-2">
-                <span class="badge bg-secondary">{{ model_name }}</span><span class="badge bg-secondary">{{ predict_steps }} steps</span>
+                <span class="badge bg-secondary">{{ model_name }}</span><span class="badge bg-secondary">{{ predict_steps }} candles</span>
                 {% if price_source == 'upload' %}
                 <span class="badge bg-warning text-dark">Uploaded price CSV</span>
+                {% elif price_source == 'forexsb' %}
+                <span class="badge bg-secondary">Downloaded H1 history</span>
                 {% else %}
                 <span class="badge bg-secondary">Project /data CSV</span>
                 {% endif %}
@@ -104,6 +107,11 @@
                 {% endif %}
                 </div>
             </div>
+            <p class="small text-white-50 mb-3" aria-label="Forecast data timing">
+                {% if chart_data.last_observed_at %}Latest price candle: <strong class="text-light">{{ chart_data.last_observed_at }} {{ chart_data.timezone }}</strong>.{% endif %}
+                {% if chart_data.candle_interval %} Typical interval: <strong class="text-light">{{ chart_data.candle_interval }}</strong>.{% endif %}
+                {% if chart_data.forecast_ends_at %} Forecast ends: <strong class="text-light">{{ chart_data.forecast_ends_at }} {{ chart_data.timezone }}</strong>.{% endif %}
+            </p>
             <div class="row g-2 mb-3">
                 <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">MAE</span><span class="metric-value">{{ chart_data.metrics.mae|floatformat:4 }}</span></div></div>
                 <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">RMSE</span><span class="metric-value">{{ chart_data.metrics.rmse|floatformat:4 }}</span></div></div>
@@ -119,6 +127,7 @@
             <div class="chart-actions d-flex flex-wrap justify-content-end gap-2 mb-2">
                 <button class="btn btn-sm btn-outline-light" id="detailed-chart-view" type="button" data-bs-toggle="modal" data-bs-target="#detailed-chart-modal">View detailed chart</button>
                 <button class="btn btn-sm btn-outline-info" id="detailed-chart-download" type="button">Download detailed PNG</button>
+                <button class="btn btn-sm btn-outline-info" id="forecast-csv-download" type="button" data-export-filename="{{ symbol_name|slugify }}-forecast.csv">Download forecast CSV</button>
             </div>
             <div class="app-card chart-card"><div id="price-chart" style="width: 100%; height: 590px;"></div></div>
             {{ chart_data|json_script:"chart-data" }}
@@ -132,7 +141,7 @@
                         </div>
                         <div class="detailed-chart-summary">
                             <span>Model <strong>{{ model_name }}</strong></span>
-                            <span>Horizon <strong>{{ predict_steps }} hours</strong></span>
+                            <span>Horizon <strong>{{ predict_steps }} candles</strong></span>
                             <span>MAE <strong>{{ chart_data.metrics.mae|floatformat:5 }}</strong></span>
                             <span>RMSE <strong>{{ chart_data.metrics.rmse|floatformat:5 }}</strong></span>
                             <span>Direction <strong>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</strong></span>
@@ -369,6 +378,7 @@
     });
 </script>
 {% if chart_data %}
+<script src="{% static 'dashboard/js/forecast_export.js' %}"></script>
 <script>
     (function () {
         const chart = document.getElementById('price-chart');
@@ -425,10 +435,14 @@
         };
         Plotly.newPlot(chart, traces, baseLayout, chartConfig);
 
+        const detailedSubtitle = [data.candle_interval || 'Candle interval unknown', data.timezone || 'Asia/Tehran'];
+        if (data.future_lower && data.future_upper) {
+            detailedSubtitle.push(`${data.forecast_interval_percent || 80}% validation-residual interval`);
+        }
         const detailedLayout = {
             ...baseLayout,
             title: {
-                text: `${data.title}<br><span style="font-size:12px;color:#91a0b5">Hourly timeline · Tehran time · 80% validation-residual interval</span>`,
+                text: `${data.title}<br><span style="font-size:12px;color:#91a0b5">${detailedSubtitle.join(' · ')}</span>`,
                 font: {color: '#f5f8fc', size: 22}
             },
             xaxis: {

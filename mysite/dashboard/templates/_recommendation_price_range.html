@@ -1,0 +1,16 @@
+{% load price_display %}
+<td class="text-nowrap">
+    {% if item.should_buy %}
+        {% if item.buy_range_low and item.sell_range_low %}
+        <div><span class="text-white-50">Buy ~</span>{{ item.buy_range_low|approximate_price }}–{{ item.buy_range_high|approximate_price }}</div>
+        <div><span class="text-white-50">Sell ~</span>{{ item.sell_range_low|approximate_price }}–{{ item.sell_range_high|approximate_price }}</div>
+        {% elif mode == 'news_only' %}
+        <span class="small text-white-50">No price forecast</span>
+        <div><a class="small link-info" href="{% url 'predict' symbol_name=item.symbol %}">Run a price forecast for ranges</a></div>
+        {% else %}
+        <span class="small text-white-50">Forecast range unavailable</span>
+        {% endif %}
+    {% else %}
+        &mdash;
+    {% endif %}
+</td>

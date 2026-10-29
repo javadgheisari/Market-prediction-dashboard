@@ -25,8 +25,9 @@ MILLENNIUM_UTC = pd.Timestamp("2000-01-01", tz="UTC")
 # Symbols from the application's published feed metadata. Assets outside this
 # set still work through CSV upload.
 SUPPORTED_CRYPTO = {
-    "ADA", "ATOM", "AVAX", "BNB", "BTC", "DOGE", "DOT", "ETC", "ETH",
-    "FIL", "ICP", "LINK", "LTC", "SOL", "TRX", "UNI", "XLM", "XRP", "PEPE",
+    "ADA", "ALGO", "ATOM", "AVAX", "BNB", "BTC", "DOGE", "DOT",
+    "EGLD", "ETC", "ETH", "FIL", "ICP", "LINK", "LTC", "SOL",
+    "TRX", "UNI", "VET", "XLM", "XRP",
 }
 
 FEED_SYMBOLS = {

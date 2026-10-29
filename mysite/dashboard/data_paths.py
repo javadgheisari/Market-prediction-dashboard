@@ -24,6 +24,7 @@ SYMBOL_DIRS = {
 SUPPORTED_CRYPTO_ASSETS = (
     "AAVE",
     "ADA",
+    "ALGO",
     "ATOM",
     "AVAX",
     "BCH",
@@ -31,6 +32,7 @@ SUPPORTED_CRYPTO_ASSETS = (
     "BTC",
     "DOGE",
     "DOT",
+    "EGLD",
     "ETC",
     "ETH",
     "FIL",
@@ -41,6 +43,7 @@ SUPPORTED_CRYPTO_ASSETS = (
     "SOL",
     "TRX",
     "UNI",
+    "VET",
     "XLM",
     "XRP",
     "PEPE",
@@ -73,6 +76,8 @@ CATEGORY_NAMES = {
     "commodities": "Commodities",
 }
 
+NON_PRICE_DIRECTORIES = {"news", "context"}
+
 
 def list_available_assets() -> dict[str, list[str]]:
     """Return all supported markets plus assets discovered from bundled CSVs."""
@@ -80,7 +85,7 @@ def list_available_assets() -> dict[str, list[str]]:
 
     for path in DATA_DIR.rglob("*.csv"):
         relative = path.relative_to(DATA_DIR)
-        if not relative.parts or relative.parts[0] == "news":
+        if not relative.parts or relative.parts[0] in NON_PRICE_DIRECTORIES:
             continue
         match = re.match(r"([A-Za-z0-9]+)(?:-[A-Za-z0-9]+)?", path.stem)
         if not match:
@@ -112,7 +117,9 @@ def resolve_data_csv(symbol: str) -> Path:
         search_roots = [DATA_DIR / directory for directory in configured_dirs]
     else:
         search_roots = [
-            path for path in DATA_DIR.iterdir() if path.is_dir() and path.name != "news"
+            path
+            for path in DATA_DIR.iterdir()
+            if path.is_dir() and path.name not in NON_PRICE_DIRECTORIES
         ]
 
     candidates = []

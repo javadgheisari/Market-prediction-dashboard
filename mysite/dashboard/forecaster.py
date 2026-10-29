@@ -50,6 +50,26 @@ def _chart_dates_in_tehran(values: list[str]) -> list[str]:
     return converted
 
 
+def _typical_candle_interval(values: list[str]) -> str | None:
+    """Describe the usual spacing without letting market closures dominate it."""
+    if len(values) < 4:
+        return None
+    dates = pd.to_datetime(values[-201:], errors="coerce", utc=True)
+    differences = pd.Series(dates).dropna().drop_duplicates().sort_values().diff()
+    minutes = differences.dropna().dt.total_seconds().div(60)
+    minutes = minutes[minutes > 0]
+    if len(minutes) < 3:
+        return None
+    typical = int(round(minutes.median()))
+    if typical < 1:
+        return None
+    for unit_minutes, unit_name in ((1440, "day"), (60, "hour")):
+        if typical >= unit_minutes and typical % unit_minutes == 0:
+            count = typical // unit_minutes
+            return f"{count} {unit_name}{'' if count == 1 else 's'}"
+    return f"{typical} minute{'' if typical == 1 else 's'}"
+
+
 def resolve_date_column(path: Path) -> str:
     # Uploaded broker "CSV" files may actually be tab- or semicolon-separated.
     columns = pd.read_csv(path, nrows=0, sep=None, engine="python").columns
@@ -113,9 +133,16 @@ def news_overlapping_price_csv(price_csv: Path, news_csv: Path):
 
 def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
     chart = metrics["chart"].copy()
+    actual_dates = chart.get("actual_dates", [])
+    chart["candle_interval"] = _typical_candle_interval(actual_dates)
     for date_key in ("actual_dates", "test_dates", "future_dates"):
         if date_key in chart:
             chart[date_key] = _chart_dates_in_tehran(chart[date_key])
+    chart["last_observed_at"] = (
+        chart["actual_dates"][-1] if actual_dates else None
+    )
+    future_dates = chart.get("future_dates", [])
+    chart["forecast_ends_at"] = future_dates[-1] if future_dates else None
     chart["timezone"] = CHART_TIMEZONE
     return_scales = metrics.get(
         "validation_selected_return_scales",

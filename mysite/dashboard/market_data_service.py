@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-from dashboard.data_paths import DATE_COLUMNS
+from dashboard.data_paths import DATE_COLUMNS, SUPPORTED_CRYPTO_ASSETS
 
 
 API_URL = "https://biquote.io/api/{symbol}/ohlc"
@@ -50,8 +50,11 @@ INTERVALS = {
 def api_symbol(symbol: str) -> str:
     """Translate a dashboard base symbol to the corresponding BiQuote pair."""
     normalized = symbol.strip().upper().replace("-", "")
-    fallback = normalized if normalized.endswith("USD") else f"{normalized}USD"
-    return SYMBOLS.get(normalized, fallback)
+    if normalized in SYMBOLS:
+        return SYMBOLS[normalized]
+    if normalized in SUPPORTED_CRYPTO_ASSETS:
+        return f"{normalized}USDT"
+    return normalized if normalized.endswith(("USD", "USDT")) else f"{normalized}USD"
 
 
 def fetch_latest_prices(symbols: list[str], session=requests) -> dict[str, dict]:

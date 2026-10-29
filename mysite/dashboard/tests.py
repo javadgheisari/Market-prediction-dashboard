@@ -16,13 +16,18 @@ from dashboard import forexsb_service, market_data_service, recommendation_servi
 from dashboard import price_export_service
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm, RecommendationForm
-from dashboard.forecaster import build_plotly_chart, news_overlapping_price_csv
+from dashboard.forecaster import (
+    _typical_candle_interval,
+    build_plotly_chart,
+    news_overlapping_price_csv,
+)
 from dashboard.news_service import (
     clear_asset_news,
     load_asset_news,
     predict_news_buy_decision,
     refresh_market_news,
 )
+from dashboard.templatetags.price_display import approximate_price
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
 
@@ -37,7 +42,10 @@ class DataPathTests(SimpleTestCase):
 
     def test_supported_crypto_assets_are_listed_without_bundled_csvs(self):
         crypto = list_available_assets()["Cryptocurrency"]
-        self.assertTrue({"SOL", "XRP", "DOGE", "ADA", "LINK"}.issubset(crypto))
+        self.assertTrue(
+            {"SOL", "XRP", "DOGE", "ADA", "LINK", "ALGO", "EGLD", "VET"}
+            .issubset(crypto)
+        )
         self.assertFalse(has_bundled_data("SOL"))
 
     def test_fx_majors_and_commodities_are_listed(self):
@@ -52,10 +60,36 @@ class DataPathTests(SimpleTestCase):
         )
 
     def test_symbol_resolves_to_existing_csv(self):
-        self.assertTrue(resolve_data_csv("BTC").is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "assets" / "btc" / "BTC_H1.csv"
+            path.parent.mkdir(parents=True)
+            path.write_text("Date,Close\n2026-09-01 00:00,100\n", encoding="utf-8")
+            with patch("dashboard.data_paths.DATA_DIR", Path(directory)):
+                self.assertEqual(resolve_data_csv("BTC"), path)
 
     def test_xau_uses_the_most_complete_bundled_history(self):
-        self.assertEqual(resolve_data_csv("XAU").name, "XAUUSD_M15.csv")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            short = root / "gold" / "XAUUSD_H1.csv"
+            long = root / "gold" / "XAUUSD_M15.csv"
+            short.parent.mkdir(parents=True)
+            short.write_text("Date,Close\n2026-09-01 00:00,100\n", encoding="utf-8")
+            long.write_text(
+                "Date,Close\n2026-09-01 00:00,100\n"
+                "2026-09-01 00:15,101\n2026-09-01 00:30,102\n",
+                encoding="utf-8",
+            )
+            with patch("dashboard.data_paths.DATA_DIR", root):
+                self.assertEqual(resolve_data_csv("XAU"), long)
+
+    def test_context_csv_is_not_used_as_price_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context = Path(directory) / "context" / "AVAX_context.csv"
+            context.parent.mkdir(parents=True)
+            context.write_text("Date,Close\n2026-09-01 00:00,100\n", encoding="utf-8")
+            with patch("dashboard.data_paths.DATA_DIR", Path(directory)):
+                self.assertFalse(has_bundled_data("AVAX"))
+                self.assertNotIn("Other", list_available_assets())
 
 
 class MarketDataServiceTests(SimpleTestCase):
@@ -63,6 +97,15 @@ class MarketDataServiceTests(SimpleTestCase):
         self.assertEqual(market_data_service.api_symbol("JPY"), "USDJPY")
         self.assertEqual(market_data_service.api_symbol("CAD"), "USDCAD")
         self.assertEqual(market_data_service.api_symbol("BRENT"), "UKOIL")
+
+    def test_crypto_updates_use_available_usdt_pairs(self):
+        for symbol in ("ALGO", "EGLD", "VET", "ADA", "AAVE", "PEPE"):
+            with self.subTest(symbol=symbol):
+                self.assertEqual(
+                    market_data_service.api_symbol(symbol), f"{symbol}USDT"
+                )
+        self.assertEqual(market_data_service.api_symbol("BTC"), "BTCUSD")
+        self.assertEqual(market_data_service.api_symbol("ETH"), "ETHUSD")
 
     def test_latest_prices_are_mapped_and_only_fresh_open_quotes_are_live(self):
         class Response:
@@ -480,6 +523,13 @@ class NewsPriceOverlapTests(SimpleTestCase):
 
 
 class ForexSbHistoryTests(SimpleTestCase):
+    def test_new_crypto_assets_have_downloadable_usdt_feeds(self):
+        for symbol in ("ALGO", "EGLD", "VET"):
+            with self.subTest(symbol=symbol):
+                self.assertTrue(forexsb_service.supports_symbol(symbol))
+                self.assertEqual(forexsb_service._feed_symbol(symbol), f"{symbol}USDT")
+        self.assertFalse(forexsb_service.supports_symbol("PEPE"))
+
     def test_fx_and_commodity_symbols_map_to_available_feeds(self):
         expected = {
             "AUD": "AUDUSD",
@@ -594,6 +644,16 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "refreshLatestPrices()")
         self.assertContains(response, "Build a model + news buy ranking")
         self.assertContains(response, reverse("recommendations"))
+        self.assertContains(response, 'id="asset-search-input"')
+        self.assertContains(response, 'data-asset-symbol="BTC"')
+        self.assertContains(response, "dashboard/js/asset_search.js")
+
+    def test_new_crypto_asset_can_select_automatic_history(self):
+        response = self.client.get(reverse("predict", kwargs={"symbol_name": "ALGO"}))
+        self.assertContains(
+            response, "ALGO history can be downloaded automatically from ForexSB"
+        )
+        self.assertContains(response, "Download H1 history automatically")
 
     @patch("dashboard.views.list_available_assets")
     def test_general_recommendations_page_can_be_prefilled_by_market(
@@ -644,6 +704,10 @@ class DashboardViewTests(SimpleTestCase):
                     "price_source": "bundled",
                     "news_enabled": True,
                     "forecast_is_naive": False,
+                    "buy_range_low": 99.0,
+                    "buy_range_high": 101.0,
+                    "sell_range_low": 104.0,
+                    "sell_range_high": 108.0,
                 }
             ],
         }
@@ -662,6 +726,9 @@ class DashboardViewTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Cryptocurrency recommendations")
         self.assertContains(response, "5.00%")
+        self.assertContains(response, "Approx. price ranges")
+        self.assertContains(response, "Buy ~</span>99–101")
+        self.assertContains(response, "Sell ~</span>104–108")
         self.assertContains(response, "Bundled CSV + news")
         self.assertContains(response, "Export ranking CSV")
         self.assertContains(response, "recommendation_export.js")
@@ -921,12 +988,16 @@ class DashboardViewTests(SimpleTestCase):
     def test_prediction_post_renders_chart(self, run_forecast):
         run_forecast.return_value = {
             "title": "BTC forecast",
-            "actual_dates": ["2026-09-01 00:00"],
-            "actual_prices": [100.0],
+            "actual_dates": ["2026-09-01 00:00", "2026-09-01 01:00"],
+            "actual_prices": [100.0, 100.5],
             "test_dates": ["2026-09-01 00:00"],
             "test_predictions": [101.0],
-            "future_dates": ["2026-09-01 01:00"],
+            "future_dates": ["2026-09-01 02:00"],
             "future_predictions": [102.0],
+            "timezone": "Asia/Tehran",
+            "last_observed_at": "2026-09-01 04:30",
+            "forecast_ends_at": "2026-09-01 05:30",
+            "candle_interval": "1 hour",
             "metrics": {
                 "mae": 1.0,
                 "rmse": 1.0,
@@ -942,7 +1013,7 @@ class DashboardViewTests(SimpleTestCase):
             {
                 "model_name": "gru",
                 "data_source": "price_only",
-                "price_source": "bundled",
+                "price_source": "forexsb",
                 "predict_steps": 24,
             },
         )
@@ -951,6 +1022,14 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "price-chart")
         self.assertContains(response, "View detailed chart")
         self.assertContains(response, "Download detailed PNG")
+        self.assertContains(response, "Download forecast CSV")
+        self.assertContains(response, "dashboard/js/forecast_export.js")
+        self.assertContains(response, "Latest price candle:")
+        self.assertContains(response, "Typical interval:")
+        self.assertContains(response, "1 hour")
+        self.assertContains(response, "Forecast ends:")
+        self.assertContains(response, "24 candles")
+        self.assertNotContains(response, "24 hours")
         self.assertContains(response, "rangeslider: {visible: true")
         self.assertContains(response, "tickformat: '%b %d<br>%H:%M'")
         html = response.content.decode()
@@ -960,7 +1039,7 @@ class DashboardViewTests(SimpleTestCase):
             model_name="gru",
             predict_steps=24,
             price_csv=None,
-            price_source="bundled",
+            price_source="forexsb",
             use_news=False,
             advanced_config={
                 "window": 60,
@@ -979,6 +1058,31 @@ class DashboardViewTests(SimpleTestCase):
         )
 
     @patch("dashboard.views.forecaster.run_dashboard_forecast")
+    def test_automatic_history_has_its_own_source_label(self, run_forecast):
+        run_forecast.return_value = {
+            "metrics": {
+                "mae": 1.0,
+                "rmse": 1.0,
+                "directional_accuracy_percent": 50.0,
+                "bullish_percent": 50.0,
+                "bearish_percent": 50.0,
+                "news_enabled": False,
+            },
+        }
+        response = self.client.post(
+            reverse("predict", kwargs={"symbol_name": "BTC"}),
+            {
+                "model_name": "gru",
+                "data_source": "price_only",
+                "price_source": "forexsb",
+                "predict_steps": 2,
+            },
+        )
+
+        self.assertContains(response, "Downloaded H1 history")
+        self.assertNotContains(response, '<span class="badge bg-secondary">Project /data CSV</span>')
+
+    @patch("dashboard.views.forecaster.run_dashboard_forecast")
     def test_prediction_error_is_shown(self, run_forecast):
         run_forecast.side_effect = ValueError("Dataset is too small")
         response = self.client.post(
@@ -986,7 +1090,7 @@ class DashboardViewTests(SimpleTestCase):
             {
                 "model_name": "gru",
                 "data_source": "with_news",
-                "price_source": "bundled",
+                "price_source": "forexsb",
                 "predict_steps": 24,
             },
         )
@@ -996,7 +1100,7 @@ class DashboardViewTests(SimpleTestCase):
             model_name="gru",
             predict_steps=24,
             price_csv=None,
-            price_source="bundled",
+            price_source="forexsb",
             use_news=True,
             advanced_config={
                 "window": 60,
@@ -1136,6 +1240,7 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "#1")
         self.assertContains(response, "EUR")
         self.assertContains(response, "BUY")
+        self.assertContains(response, "No price forecast")
         self.assertContains(response, "No active news signals are available.")
         self.assertContains(response, "Export ranking CSV")
         self.assertContains(response, "recommendation_export.js")
@@ -1180,7 +1285,7 @@ class DashboardViewTests(SimpleTestCase):
             {
                 "model_name": "news_buy",
                 "data_source": "price_only",
-                "price_source": "bundled",
+                "price_source": "forexsb",
                 "predict_steps": 24,
             },
         )
@@ -1194,10 +1299,17 @@ class DashboardViewTests(SimpleTestCase):
 
 
 class RecommendationServiceTests(SimpleTestCase):
+    def test_approximate_price_keeps_small_crypto_values_readable(self):
+        self.assertEqual(approximate_price(86249.123456), "86,249.12")
+        self.assertEqual(approximate_price(0.000004975), "0.000004975")
+        self.assertEqual(approximate_price(float("nan")), "—")
+
     def test_forecast_reports_move_and_time_until_first_reversal(self):
         chart = {
             "actual_prices": [100.0],
             "future_predictions": [101.0, 102.0, 101.0, 103.0],
+            "future_lower": [99.0, 100.0, 98.0, 101.0],
+            "future_upper": [103.0, 104.0, 103.0, 105.0],
             "actual_dates": ["2026-10-18 10:00"],
             "future_dates": [
                 "2026-10-18 11:00",
@@ -1221,6 +1333,15 @@ class RecommendationServiceTests(SimpleTestCase):
         self.assertEqual(result["trend_steps"], 2)
         self.assertEqual(result["trend_duration"], "2 hours")
         self.assertTrue(result["trend_reversal_expected"])
+        self.assertEqual(
+            (
+                result["buy_range_low"],
+                result["buy_range_high"],
+                result["sell_range_low"],
+                result["sell_range_high"],
+            ),
+            (99.0, 103.0, 101.0, 105.0),
+        )
 
         chart["future_predictions"] = [99.0, 98.0, 99.0, 97.0]
         falling = recommendation_service._recommendation_from_chart(
@@ -1230,6 +1351,94 @@ class RecommendationServiceTests(SimpleTestCase):
         self.assertEqual(falling["estimated_move_percent"], -2.0)
         self.assertEqual(falling["trend_duration"], "2 hours")
         self.assertTrue(falling["trend_reversal_expected"])
+        self.assertIsNone(falling["buy_range_low"])
+
+    def test_missing_or_invalid_forecast_bands_prevent_buy(self):
+        chart = {
+            "actual_prices": [100.0],
+            "future_predictions": [105.0, 110.0],
+            "future_lower": [99.0, float("nan")],
+            "future_upper": [106.0, 115.0],
+            "metrics": {
+                "bullish_percent": 70.0,
+                "directional_accuracy_percent": 60.0,
+            },
+        }
+        result = recommendation_service._recommendation_from_chart(
+            chart, "bundled", False
+        )
+
+        self.assertFalse(result["should_buy"])
+        self.assertEqual(result["decision"], "DO NOT BUY")
+        self.assertEqual(result["trade_range_note"], "Forecast price bands are unavailable.")
+        self.assertIsNone(result["buy_range_low"])
+        self.assertIsNone(result["sell_range_high"])
+
+    def test_inverted_uni_bands_prevent_buy_despite_bullish_point_forecast(self):
+        chart = {
+            "actual_prices": [7.0],
+            "future_predictions": [7.11, 7.15],
+            "future_lower": [7.10074, 7.08894],
+            "future_upper": [7.12123, 7.09311],
+            "metrics": {
+                "bullish_percent": 70.0,
+                "directional_accuracy_percent": 60.0,
+                "forecast_is_naive": False,
+            },
+        }
+        result = recommendation_service._recommendation_from_chart(
+            chart, "forexsb", False
+        )
+
+        self.assertGreater(result["expected_return_percent"], 0)
+        self.assertGreater(result["ranking_score"], 0)
+        self.assertFalse(result["should_buy"])
+        self.assertEqual(result["decision"], "DO NOT BUY")
+        self.assertEqual(
+            result["trade_range_note"],
+            "Forecast bands imply no positive spread between entry and exit.",
+        )
+        self.assertIsNone(result["buy_range_low"])
+        self.assertIsNone(result["sell_range_high"])
+
+    @patch("dashboard.recommendation_service.news_service.predict_news_buy_decision")
+    @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecasts")
+    @patch("dashboard.recommendation_service._price_source", return_value="forexsb")
+    def test_inverted_ensemble_bands_prevent_buy(
+        self, price_source, run_forecasts, predict_news
+    ):
+        chart = {
+            "actual_prices": [7.0],
+            "future_predictions": [7.11, 7.15],
+            "future_lower": [7.10074, 7.08894],
+            "future_upper": [7.12123, 7.09311],
+            "metrics": {
+                "bullish_percent": 70.0,
+                "directional_accuracy_percent": 60.0,
+                "forecast_is_naive": False,
+            },
+        }
+        run_forecasts.return_value = {
+            model_name: chart
+            for model_name in recommendation_service.ENSEMBLE_MODEL_NAMES
+        }
+        predict_news.return_value = {
+            "signal_score": 0.8,
+            "confidence_percent": 75.0,
+        }
+
+        for result in (
+            recommendation_service._model_ensemble_recommendation("UNI", 2, False),
+            recommendation_service._ensemble_recommendation("UNI", 2),
+        ):
+            with self.subTest(component_count=result["component_count"]):
+                self.assertGreater(result["ranking_score"], 0)
+                self.assertFalse(result["should_buy"])
+                self.assertEqual(result["decision"], "DO NOT BUY")
+                self.assertEqual(
+                    result["trade_range_note"],
+                    "Forecast bands imply no positive spread between entry and exit.",
+                )
 
     @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecast")
     @patch("dashboard.recommendation_service.has_bundled_data", return_value=True)
@@ -1240,6 +1449,8 @@ class RecommendationServiceTests(SimpleTestCase):
             "AAA": {
                 "actual_prices": [100.0],
                 "future_predictions": [110.0],
+                "future_lower": [108.0],
+                "future_upper": [112.0],
                 "metrics": {
                     "bullish_percent": 70.0,
                     "directional_accuracy_percent": 60.0,
@@ -1250,6 +1461,8 @@ class RecommendationServiceTests(SimpleTestCase):
             "BBB": {
                 "actual_prices": [100.0],
                 "future_predictions": [105.0],
+                "future_lower": [103.0],
+                "future_upper": [107.0],
                 "metrics": {
                     "bullish_percent": 60.0,
                     "directional_accuracy_percent": 55.0,
@@ -1315,6 +1528,8 @@ class RecommendationServiceTests(SimpleTestCase):
             model_name: {
                 "actual_prices": [100.0],
                 "future_predictions": [target],
+                "future_lower": [target - 2.0],
+                "future_upper": [target + 2.0],
                 "metrics": {
                     "bullish_percent": bullish,
                     "directional_accuracy_percent": accuracy,
@@ -1362,6 +1577,8 @@ class RecommendationServiceTests(SimpleTestCase):
         self.assertAlmostEqual(item["news_score"], 0.6)
         self.assertAlmostEqual(item["ranking_score"], 0.2409)
         self.assertTrue(item["should_buy"])
+        self.assertAlmostEqual(item["buy_range_low"], 102.0)
+        self.assertAlmostEqual(item["sell_range_high"], 106.0)
 
     @patch("dashboard.recommendation_service.news_service.predict_news_buy_decision")
     @patch("dashboard.recommendation_service.forecaster.run_dashboard_forecasts")
@@ -1415,6 +1632,8 @@ class RecommendationServiceTests(SimpleTestCase):
                 model_name: {
                     "actual_prices": [100.0],
                     "future_predictions": [target],
+                    "future_lower": [target - 2.0],
+                    "future_upper": [target + 2.0],
                     "metrics": {
                         "bullish_percent": bullish,
                         "directional_accuracy_percent": accuracy,
@@ -1456,10 +1675,28 @@ class RecommendationServiceTests(SimpleTestCase):
                 self.assertAlmostEqual(item["ranking_score"], 0.1212)
                 self.assertEqual(item["news_enabled"], include_news)
                 self.assertTrue(item["should_buy"])
+                self.assertAlmostEqual(item["buy_range_low"], 102.0)
+                self.assertAlmostEqual(item["sell_range_high"], 106.0)
                 run_forecasts.reset_mock()
 
 
 class ChartAdapterTests(SimpleTestCase):
+    def test_candle_interval_requires_several_observations(self):
+        self.assertIsNone(
+            _typical_candle_interval(["2026-09-01 00:00", "2026-09-01 00:15"])
+        )
+        self.assertEqual(
+            _typical_candle_interval(
+                [
+                    "2026-09-01 00:00",
+                    "2026-09-01 00:15",
+                    "2026-09-01 00:30",
+                    "2026-09-01 00:45",
+                ]
+            ),
+            "15 minutes",
+        )
+
     def test_metrics_are_converted_for_template(self):
         result = build_plotly_chart(
             {
@@ -1505,6 +1742,37 @@ class ChartAdapterTests(SimpleTestCase):
         self.assertEqual(result["actual_dates"], ["2026-09-12 09:30"])
         self.assertEqual(result["future_dates"], ["2026-09-12 10:30"])
         self.assertEqual(result["timezone"], "Asia/Tehran")
+        self.assertEqual(result["last_observed_at"], "2026-09-12 09:30")
+        self.assertEqual(result["forecast_ends_at"], "2026-09-12 10:30")
+        self.assertIsNone(result["candle_interval"])
+
+    def test_typical_candle_interval_ignores_weekend_gap(self):
+        result = build_plotly_chart(
+            {
+                "chart": {
+                    "actual_dates": [
+                        "2026-09-11 22:00",
+                        "2026-09-11 23:00",
+                        "2026-09-14 00:00",
+                        "2026-09-14 01:00",
+                    ],
+                    "future_dates": ["2026-09-14 02:00"],
+                },
+                "model_metrics": {
+                    "mae": 1.0,
+                    "rmse": 1.0,
+                    "directional_accuracy_percent": 50.0,
+                },
+                "forecast_direction_probability": {
+                    "bullish_percent": 50.0,
+                    "bearish_percent": 50.0,
+                },
+                "news": None,
+            }
+        )
+
+        self.assertEqual(result["candle_interval"], "1 hour")
+        self.assertEqual(result["last_observed_at"], "2026-09-14 04:30")
 
     def test_each_forecast_horizon_gets_its_own_calibration(self):
         actual = [[1.0, 1.0], [-1.0, -1.0], [1.0, 1.0], [-1.0, -1.0]]
