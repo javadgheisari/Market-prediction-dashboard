@@ -148,8 +148,21 @@ def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
         "validation_selected_return_scales",
         [metrics.get("validation_selected_return_scale", 1.0)],
     )
+    report_card = metrics.get("horizon_backtest")
+    if report_card is not None:
+        report_card = report_card.copy()
+        report_card.pop("by_horizon", None)
+        for key in (
+            "first_origin_at", "last_origin_at", "first_target_at", "last_target_at"
+        ):
+            if report_card.get(key):
+                report_card[key] = _chart_dates_in_tehran([report_card[key]])[0]
+        report_card["data_rows"] = metrics.get("rows")
+        report_card["test_candles"] = metrics.get("test_samples")
+        report_card["data_last_at"] = chart["last_observed_at"]
     return {
         **chart,
+        "report_card": report_card,
         "metrics": {
             "mae": metrics["model_metrics"]["mae"],
             "rmse": metrics["model_metrics"]["rmse"],
@@ -167,6 +180,11 @@ def build_plotly_chart(metrics: dict[str, Any]) -> dict[str, Any]:
             ],
             "news_enabled": metrics["news"] is not None,
             "forecast_is_naive": all(scale == 0 for scale in return_scales),
+            "diagnostic_label": (
+                "Single-origin path diagnostics"
+                if metrics.get("model") == "CHRONOS_2"
+                else "One-candle walk-forward diagnostics"
+            ),
         },
     }
 

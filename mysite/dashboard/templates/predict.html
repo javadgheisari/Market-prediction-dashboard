@@ -112,6 +112,33 @@
                 {% if chart_data.candle_interval %} Typical interval: <strong class="text-light">{{ chart_data.candle_interval }}</strong>.{% endif %}
                 {% if chart_data.forecast_ends_at %} Forecast ends: <strong class="text-light">{{ chart_data.forecast_ends_at }} {{ chart_data.timezone }}</strong>.{% endif %}
             </p>
+            {% if chart_data.report_card %}
+            <div class="report-card mb-3" aria-label="Horizon-matched forecast report card">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                    <div>
+                        <div class="card-kicker mb-1">Held-out report card</div>
+                        <h3 class="h5 mb-1">{{ chart_data.report_card.horizon_steps }}-candle forecast</h3>
+                        <p class="small text-white-50 mb-0">{{ chart_data.report_card.method }} · {{ chart_data.report_card.sample_count }} complete forecast{{ chart_data.report_card.sample_count|pluralize }}</p>
+                    </div>
+                    <span class="badge bg-secondary">Data through {{ chart_data.report_card.data_last_at }} {{ chart_data.timezone }}</span>
+                </div>
+                {% if chart_data.report_card.sample_count %}
+                <div class="row g-2 mb-3">
+                    <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Horizon MAE</span><span class="metric-value">{{ chart_data.report_card.model_metrics.mae|floatformat:4 }}</span></div></div>
+                    <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Last-price MAE</span><span class="metric-value">{{ chart_data.report_card.naive_last_price_baseline.mae|floatformat:4 }}</span></div></div>
+                    <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">MAE skill</span><span class="metric-value {% if chart_data.report_card.model_metrics.mae_skill_vs_naive_percent < 0 %}text-danger{% else %}text-success{% endif %}">{{ chart_data.report_card.model_metrics.mae_skill_vs_naive_percent|floatformat:1 }}%</span></div></div>
+                    <div class="col-6 col-xl-3"><div class="metric-card"><span class="metric-label">Direction correct</span><span class="metric-value">{{ chart_data.report_card.model_metrics.directional_accuracy_percent|floatformat:1 }}%</span></div></div>
+                </div>
+                <p class="small text-white-50 mb-1">Targets tested: {{ chart_data.report_card.first_target_at }}–{{ chart_data.report_card.last_target_at }} {{ chart_data.timezone }}. {{ chart_data.report_card.test_candles }} candles in the holdout; {{ chart_data.report_card.data_rows }} total data rows.</p>
+                <p class="small text-white-50 mb-1">Positive MAE skill means the forecast beat an unchanged-price prediction at this horizon.</p>
+                {% if chart_data.report_card.interval_coverage_percent != None %}<p class="small text-white-50 mb-1">80% forecast interval contained the actual horizon price in {{ chart_data.report_card.interval_coverage_percent|floatformat:1 }}% of completed tests.</p>{% endif %}
+                {% if chart_data.report_card.note %}<p class="small text-warning mb-0">{{ chart_data.report_card.note }}</p>{% else %}<p class="small text-white-50 mb-0">Each test uses only candles available at its forecast origin. Overlapping tests are related, so the sample count is not a count of independent markets.</p>{% endif %}
+                {% else %}
+                <p class="small text-warning mb-0">{{ chart_data.report_card.note }}</p>
+                {% endif %}
+            </div>
+            {% endif %}
+            <h3 class="h6 text-white-50 mb-2">{{ chart_data.metrics.diagnostic_label }}</h3>
             <div class="row g-2 mb-3">
                 <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">MAE</span><span class="metric-value">{{ chart_data.metrics.mae|floatformat:4 }}</span></div></div>
                 <div class="col-6 col-xl"><div class="metric-card"><span class="metric-label">RMSE</span><span class="metric-value">{{ chart_data.metrics.rmse|floatformat:4 }}</span></div></div>
@@ -142,9 +169,15 @@
                         <div class="detailed-chart-summary">
                             <span>Model <strong>{{ model_name }}</strong></span>
                             <span>Horizon <strong>{{ predict_steps }} candles</strong></span>
-                            <span>MAE <strong>{{ chart_data.metrics.mae|floatformat:5 }}</strong></span>
-                            <span>RMSE <strong>{{ chart_data.metrics.rmse|floatformat:5 }}</strong></span>
-                            <span>Direction <strong>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</strong></span>
+                            {% if chart_data.report_card.sample_count %}
+                            <span>Horizon MAE <strong>{{ chart_data.report_card.model_metrics.mae|floatformat:5 }}</strong></span>
+                            <span>Horizon RMSE <strong>{{ chart_data.report_card.model_metrics.rmse|floatformat:5 }}</strong></span>
+                            <span>Horizon direction <strong>{{ chart_data.report_card.model_metrics.directional_accuracy_percent|floatformat:1 }}%</strong></span>
+                            {% else %}
+                            <span>Test MAE <strong>{{ chart_data.metrics.mae|floatformat:5 }}</strong></span>
+                            <span>Test RMSE <strong>{{ chart_data.metrics.rmse|floatformat:5 }}</strong></span>
+                            <span>Test direction <strong>{{ chart_data.metrics.directional_accuracy_percent|floatformat:1 }}%</strong></span>
+                            {% endif %}
                         </div>
                         <div class="modal-body p-2 p-md-3"><div id="detailed-price-chart"></div></div>
                     </div>

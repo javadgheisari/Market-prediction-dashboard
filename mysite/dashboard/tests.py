@@ -998,6 +998,23 @@ class DashboardViewTests(SimpleTestCase):
             "last_observed_at": "2026-09-01 04:30",
             "forecast_ends_at": "2026-09-01 05:30",
             "candle_interval": "1 hour",
+            "report_card": {
+                "horizon_steps": 24,
+                "method": "rolling held-out origins",
+                "sample_count": 18,
+                "first_target_at": "2026-08-01 12:30",
+                "last_target_at": "2026-08-02 05:30",
+                "test_candles": 41,
+                "data_rows": 220,
+                "data_last_at": "2026-09-01 04:30",
+                "model_metrics": {
+                    "mae": 1.2,
+                    "mae_skill_vs_naive_percent": 12.0,
+                    "directional_accuracy_percent": 61.0,
+                },
+                "naive_last_price_baseline": {"mae": 1.36},
+                "interval_coverage_percent": 78.0,
+            },
             "metrics": {
                 "mae": 1.0,
                 "rmse": 1.0,
@@ -1028,6 +1045,10 @@ class DashboardViewTests(SimpleTestCase):
         self.assertContains(response, "Typical interval:")
         self.assertContains(response, "1 hour")
         self.assertContains(response, "Forecast ends:")
+        self.assertContains(response, "Held-out report card")
+        self.assertContains(response, "18 complete forecasts")
+        self.assertContains(response, "Last-price MAE")
+        self.assertContains(response, "78.0% of completed tests")
         self.assertContains(response, "24 candles")
         self.assertNotContains(response, "24 hours")
         self.assertContains(response, "rangeslider: {visible: true")
@@ -1717,6 +1738,30 @@ class ChartAdapterTests(SimpleTestCase):
         self.assertEqual(result["metrics"]["bullish_percent"], 70.0)
         self.assertFalse(result["metrics"]["news_enabled"])
         self.assertTrue(result["metrics"]["forecast_is_naive"])
+
+    def test_horizon_report_dates_and_sample_count_are_adapted(self):
+        result = build_plotly_chart(
+            {
+                "chart": {"actual_dates": ["2026-09-12 06:00"]},
+                "model": "XGBOOST_PORTFOLIO",
+                "rows": 120,
+                "test_samples": 24,
+                "model_metrics": {"mae": 1.0, "rmse": 2.0, "directional_accuracy_percent": 55.0},
+                "forecast_direction_probability": {"bullish_percent": 70.0, "bearish_percent": 30.0},
+                "news": None,
+                "horizon_backtest": {
+                    "horizon_steps": 3,
+                    "sample_count": 22,
+                    "first_target_at": "2026-09-01 06:00",
+                    "last_target_at": "2026-09-02 06:00",
+                    "by_horizon": [{"horizon_steps": 1}],
+                },
+            }
+        )
+        self.assertEqual(result["report_card"]["first_target_at"], "2026-09-01 09:30")
+        self.assertEqual(result["report_card"]["sample_count"], 22)
+        self.assertEqual(result["report_card"]["data_rows"], 120)
+        self.assertNotIn("by_horizon", result["report_card"])
 
     def test_chart_dates_are_displayed_in_tehran_time(self):
         result = build_plotly_chart(

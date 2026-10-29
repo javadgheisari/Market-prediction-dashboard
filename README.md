@@ -253,6 +253,13 @@ MSE, MAE, RMSE, MAPE, directional accuracy, and skill versus the naive
 last-price baseline. Future charts include an 80% interval bootstrapped from
 complete validation-horizon residuals. This interval describes historical
 model error; it is not a guarantee that future prices will remain inside it.
+The `horizon_backtest` report separately evaluates the selected multi-candle
+forecast from each held-out origin with enough subsequent candles. It reports
+the number of complete forecasts, target-date span, horizon MAE, last-price
+baseline MAE, directional accuracy, and observed coverage of a validation-
+residual 80% interval. The original one-candle walk-forward metrics remain as
+diagnostics. If the test partition is shorter than the selected horizon, the
+report explicitly says that no horizon-matched score is available.
 
 ## Run the Django dashboard
 
@@ -276,6 +283,9 @@ actual prices, one-step test predictions, future predictions, error metrics,
 directional accuracy, and estimated bullish/bearish probabilities. It also
 shows the latest price candle, typical candle interval, forecast end time, and
 selected history source so the forecast horizon has clear timing context.
+The held-out report card leads with performance at the selected forecast
+horizon and states its sample count and evaluation dates. Chronos-2 currently
+has only one held-out origin, which the card labels as limited evidence.
 
 Use the market search to filter symbols or entire market categories. After a
 forecast completes, **Download forecast CSV** exports the actual, test, and

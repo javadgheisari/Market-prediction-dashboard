@@ -22,6 +22,7 @@ from sequence_forecaster import (
     estimate_return_bounds,
     estimate_direction_probabilities,
     extract_asset_symbol,
+    horizon_backtest,
     infer_interval,
     load_market_data,
     load_news_data,
@@ -309,19 +310,19 @@ def train_and_forecast_xgboost(
     )
     raw_test_member_returns = np.asarray(
         [
-            clip_predicted_returns(_as_2d(model.predict(x_test))[:, 0], return_bounds)
+            clip_predicted_returns(_as_2d(model.predict(x_test)), return_bounds)
             for model in models
         ]
     )
-    test_member_returns = raw_test_member_returns * np.asarray(
-        [scales[0] for scales in member_scales]
-    )[:, None]
-    predicted_returns = np.sum(
-        portfolio_weights[0, :, None] * test_member_returns, axis=0
+    test_member_returns = raw_test_member_returns * np.asarray(member_scales)[:, None, :]
+    test_returns_by_horizon = np.einsum(
+        "hm,mnh->nh", portfolio_weights, test_member_returns
     )
-    raw_predicted_returns = np.sum(
-        portfolio_weights[0, :, None] * raw_test_member_returns, axis=0
+    raw_test_returns_by_horizon = np.einsum(
+        "hm,mnh->nh", portfolio_weights, raw_test_member_returns
     )
+    predicted_returns = test_returns_by_horizon[:, 0]
+    raw_predicted_returns = raw_test_returns_by_horizon[:, 0]
     previous_close = close[split_index - 1 : len(df) - 1]
     test_predictions = previous_close * np.exp(predicted_returns)
     actual_test = close[split_index:]
@@ -336,6 +337,10 @@ def train_and_forecast_xgboost(
     model_metrics["mae_skill_vs_naive_percent"] = float(
         (1 - model_metrics["mae"] / baseline_metrics["mae"]) * 100
         if baseline_metrics["mae"] > 0 else 0.0
+    )
+    backtest = horizon_backtest(
+        close, dates, split_index, test_returns_by_horizon,
+        y_validation, validation_predictions,
     )
 
     final_window = feature_values[-window:].reshape(1, -1)
@@ -389,6 +394,7 @@ def train_and_forecast_xgboost(
             actual_test, previous_close * np.exp(raw_predicted_returns)
         ),
         "naive_last_price_baseline": baseline_metrics,
+        "horizon_backtest": backtest,
         "forecast_direction_probability": probabilities,
         "chart": {
             "title": f"{extract_asset_symbol(csv_path.stem)} price forecast (XGBoost portfolio)",

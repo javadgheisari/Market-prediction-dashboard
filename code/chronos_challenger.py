@@ -213,6 +213,42 @@ def train_and_forecast_chronos(
         if baseline_metrics["mae"]
         else 0.0
     )
+    backtest: dict[str, Any] = {
+        "horizon_steps": forecast_steps,
+        "method": "single held-out origin",
+        "sample_count": 0,
+        "note": "The holdout is shorter than the selected forecast horizon.",
+    }
+    if evaluation_steps >= forecast_steps:
+        target_index = forecast_steps - 1
+        origin = float(close[split_index - 1])
+        actual = float(actual_test[target_index])
+        predicted = float(test_paths["predictions"][target_index])
+        target_model = calculate_metrics(np.array([actual]), np.array([predicted]))
+        target_baseline = calculate_metrics(np.array([actual]), np.array([origin]))
+        target_model["directional_accuracy_percent"] = float(
+            np.sign(actual - origin) == np.sign(predicted - origin)
+        ) * 100
+        target_model["mae_skill_vs_naive_percent"] = float(
+            (1 - target_model["mae"] / target_baseline["mae"]) * 100
+            if target_baseline["mae"] > 0 else 0.0
+        )
+        backtest = {
+            "horizon_steps": forecast_steps,
+            "method": "single held-out origin",
+            "sample_count": 1,
+            "first_origin_at": dates.iloc[split_index - 1].strftime("%Y-%m-%d %H:%M"),
+            "last_origin_at": dates.iloc[split_index - 1].strftime("%Y-%m-%d %H:%M"),
+            "first_target_at": dates.iloc[split_index + target_index].strftime("%Y-%m-%d %H:%M"),
+            "last_target_at": dates.iloc[split_index + target_index].strftime("%Y-%m-%d %H:%M"),
+            "model_metrics": target_model,
+            "naive_last_price_baseline": target_baseline,
+            "interval_nominal_percent": 80,
+            "interval_coverage_percent": float(
+                test_paths["0.1"][target_index] <= actual <= test_paths["0.9"][target_index]
+            ) * 100,
+            "note": "One origin is insufficient to judge reliability; compare across more data.",
+        }
 
     interval = infer_interval(dates)
     future_dates = make_future_dates(dates, forecast_steps, interval)
@@ -252,6 +288,7 @@ def train_and_forecast_chronos(
         "validation_selected_return_scales": [1.0] * forecast_steps,
         "model_metrics": model_metrics,
         "naive_last_price_baseline": baseline_metrics,
+        "horizon_backtest": backtest,
         "eligible_for_ensemble": model_metrics["mae"] < baseline_metrics["mae"],
         "forecast_direction_probability": probabilities,
         "chart": {

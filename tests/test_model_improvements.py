@@ -124,6 +124,47 @@ class NewsFeatureTests(unittest.TestCase):
         )
 
 
+class HorizonBacktestTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.forecaster = load_module("sequence_forecaster")
+        except ModuleNotFoundError as error:
+            raise unittest.SkipTest(str(error))
+
+    def test_complete_direct_paths_are_scored_against_their_origin(self):
+        close = np.array([100.0, 110.0, 120.0, 130.0, 140.0, 150.0])
+        dates = pd.Series(pd.date_range("2026-01-01", periods=6, freq="h"))
+        predictions = np.array([
+            [np.log(130 / 120), np.log(140 / 130)],
+            [np.log(140 / 130), np.log(150 / 140)],
+            [10.0, 10.0],  # Its second target is outside the holdout.
+        ])
+        result = self.forecaster.horizon_backtest(
+            close, dates, 3, predictions,
+            validation_actual_returns=np.array([[0.1, 0.1], [-0.1, -0.1]]),
+            validation_predicted_returns=np.zeros((2, 2)),
+        )
+
+        self.assertEqual(result["horizon_steps"], 2)
+        self.assertEqual(result["sample_count"], 2)
+        self.assertAlmostEqual(result["model_metrics"]["mae"], 0.0)
+        self.assertAlmostEqual(result["naive_last_price_baseline"]["mae"], 20.0)
+        self.assertEqual(result["model_metrics"]["directional_accuracy_percent"], 100.0)
+        self.assertEqual(result["interval_coverage_percent"], 100.0)
+        self.assertEqual(result["first_target_at"], "2026-01-01 04:00")
+        self.assertEqual(result["last_target_at"], "2026-01-01 05:00")
+
+    def test_short_holdout_reports_no_horizon_score(self):
+        close = np.array([100.0, 101.0, 102.0, 103.0])
+        dates = pd.Series(pd.date_range("2026-01-01", periods=4, freq="h"))
+        result = self.forecaster.horizon_backtest(
+            close, dates, 3, np.zeros((1, 2))
+        )
+        self.assertEqual(result["sample_count"], 0)
+        self.assertNotIn("model_metrics", result)
+
+
 class ChronosDashboardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -159,6 +200,8 @@ class ChronosDashboardTests(unittest.TestCase):
         self.assertEqual(len(result["chart"]["future_predictions"]), 3)
         self.assertEqual(len(result["chart"]["future_lower"]), 3)
         self.assertIn("directional_accuracy_percent", result["model_metrics"])
+        self.assertEqual(result["horizon_backtest"]["sample_count"], 1)
+        self.assertEqual(result["horizon_backtest"]["method"], "single held-out origin")
         self.assertEqual(result["news"], None)
 
 

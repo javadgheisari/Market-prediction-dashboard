@@ -640,6 +640,94 @@ def calculate_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, fl
     }
 
 
+def horizon_backtest(
+    close: np.ndarray,
+    dates: pd.Series,
+    split_index: int,
+    predicted_returns: np.ndarray,
+    validation_actual_returns: np.ndarray | None = None,
+    validation_predicted_returns: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Score direct forecasts from every test origin with a complete horizon.
+
+    Each origin uses its last observed close. Later origins may use newly
+    observed candles, just as the one-step walk-forward evaluation does.
+    Validation residuals alone set the optional 80% interval bounds.
+    """
+    prices = np.asarray(close, dtype=float)
+    returns = np.asarray(predicted_returns, dtype=float)
+    if returns.ndim != 2 or returns.shape[0] != len(prices) - split_index:
+        raise ValueError("Test forecasts must have one row per held-out origin.")
+    if returns.shape[1] < 1:
+        raise ValueError("Test forecasts must include at least one horizon step.")
+    cumulative_returns = np.cumsum(returns, axis=1)
+
+    cumulative_residuals = None
+    if validation_actual_returns is not None and validation_predicted_returns is not None:
+        validation_residuals = (
+            np.asarray(validation_actual_returns, dtype=float)
+            - np.asarray(validation_predicted_returns, dtype=float)
+        )
+        if validation_residuals.ndim != 2 or validation_residuals.shape[1] != returns.shape[1]:
+            raise ValueError("Validation residuals must match the forecast horizon.")
+        cumulative_residuals = np.cumsum(validation_residuals, axis=1)
+
+    rows = []
+    for step in range(1, returns.shape[1] + 1):
+        count = min(len(returns), len(prices) - split_index - step + 1)
+        if count < 1:
+            rows.append({"horizon_steps": step, "sample_count": 0})
+            continue
+        origins = prices[split_index - 1 : split_index + count - 1]
+        actual = prices[split_index + step - 1 : split_index + step - 1 + count]
+        predicted_log_returns = cumulative_returns[:count, step - 1]
+        predicted = origins * np.exp(predicted_log_returns)
+        model = calculate_metrics(actual, predicted)
+        baseline = calculate_metrics(actual, origins)
+        model["directional_accuracy_percent"] = float(
+            np.mean(np.sign(actual - origins) == np.sign(predicted - origins)) * 100
+        )
+        model["mae_skill_vs_naive_percent"] = float(
+            (1 - model["mae"] / baseline["mae"]) * 100
+            if baseline["mae"] > 0 else 0.0
+        )
+        row = {
+            "horizon_steps": step,
+            "sample_count": count,
+            "first_origin_at": pd.Timestamp(dates.iloc[split_index - 1]).strftime("%Y-%m-%d %H:%M"),
+            "last_origin_at": pd.Timestamp(
+                dates.iloc[split_index + count - 2]
+            ).strftime("%Y-%m-%d %H:%M"),
+            "first_target_at": pd.Timestamp(
+                dates.iloc[split_index + step - 1]
+            ).strftime("%Y-%m-%d %H:%M"),
+            "last_target_at": pd.Timestamp(
+                dates.iloc[split_index + step + count - 2]
+            ).strftime("%Y-%m-%d %H:%M"),
+            "model_metrics": model,
+            "naive_last_price_baseline": baseline,
+        }
+        if cumulative_residuals is not None and len(cumulative_residuals):
+            terminal_residuals = cumulative_residuals[:, step - 1]
+            lower, upper = np.quantile(terminal_residuals, [0.1, 0.9])
+            lower_prices = origins * np.exp(predicted_log_returns + lower)
+            upper_prices = origins * np.exp(predicted_log_returns + upper)
+            row["interval_coverage_percent"] = float(
+                np.mean((actual >= lower_prices) & (actual <= upper_prices)) * 100
+            )
+            row["interval_nominal_percent"] = 80
+        rows.append(row)
+
+    selected = rows[-1].copy()
+    selected["method"] = "rolling held-out origins"
+    selected["by_horizon"] = rows
+    if selected["sample_count"] == 0:
+        selected["note"] = "The holdout is shorter than the selected forecast horizon."
+    elif selected["sample_count"] < 10:
+        selected["note"] = "Few complete forecasts are available; these scores are unstable."
+    return selected
+
+
 def estimate_return_bounds(training_returns: np.ndarray) -> tuple[float, float]:
     """Return conservative data-derived bounds for one-candle predictions."""
     values = np.asarray(training_returns, dtype=float).ravel()
@@ -1183,11 +1271,15 @@ def train_and_forecast(
         dtype=np.float32,
     )
     predicted_scaled = model.predict(x_test, batch_size=config.batch_size, verbose=0)
-    raw_predicted_returns = clip_predicted_returns(
-        target_scaler.inverse_transform(predicted_scaled[:, :1]).ravel(),
+    raw_test_returns_by_horizon = clip_predicted_returns(
+        target_scaler.inverse_transform(
+            predicted_scaled.reshape(-1, 1)
+        ).reshape(predicted_scaled.shape),
         return_bounds,
     )
-    predicted_returns = raw_predicted_returns * return_scale
+    test_returns_by_horizon = raw_test_returns_by_horizon * return_scales[None, :]
+    raw_predicted_returns = raw_test_returns_by_horizon[:, 0]
+    predicted_returns = test_returns_by_horizon[:, 0]
     previous_close = close[split_index - 1 : len(df) - 1]
     test_predictions = previous_close * np.exp(predicted_returns)
     actual_test = close[split_index:]
@@ -1209,6 +1301,11 @@ def train_and_forecast(
         if baseline_mae > 0
         else 0.0
     )
+    backtest = horizon_backtest(
+        close, dates, split_index, test_returns_by_horizon,
+        validation_actual_returns_by_horizon,
+        validation_returns_by_horizon * return_scales[None, :],
+    )
     metrics: dict[str, Any] = {
         "model": kind,
         "rows": len(df),
@@ -1223,6 +1320,7 @@ def train_and_forecast(
         "model_metrics": model_metrics,
         "raw_unscaled_model_metrics": raw_model_metrics,
         "naive_last_price_baseline": baseline_metrics,
+        "horizon_backtest": backtest,
     }
     final_window = scaled_features[-config.window :][None, ...].astype(np.float32)
     future_scaled = model.predict(final_window, verbose=0)[0].reshape(-1, 1)
