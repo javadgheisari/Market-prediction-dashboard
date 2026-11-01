@@ -2,7 +2,7 @@ import math
 from datetime import datetime
 from typing import Any
 
-from dashboard import forecaster, forexsb_service, news_service
+from dashboard import forecast_track_record, forecaster, forexsb_service, news_service
 from dashboard.data_paths import has_bundled_data
 from dashboard.forms import RECOMMENDATION_MODEL_CHOICES
 
@@ -234,7 +234,26 @@ def _forecast_recommendation(
         use_news=use_news,
         advanced_config=DEFAULT_ADVANCED_CONFIG.copy(),
     )
-    return _recommendation_from_chart(chart, price_source, use_news)
+    recommendation = _recommendation_from_chart(chart, price_source, use_news)
+    _record_recommendation_charts(
+        symbol, {model_name: chart}, price_source, use_news, predict_steps
+    )
+    return recommendation
+
+
+def _record_recommendation_charts(
+    symbol: str,
+    charts: dict[str, dict[str, Any]],
+    price_source: str,
+    use_news: bool,
+    predict_steps: int,
+) -> None:
+    """Keep each price model's issued path visible in the asset track record."""
+    for model_name, chart in charts.items():
+        forecast_track_record.record_prediction(
+            symbol, model_name, chart, price_source=price_source,
+            used_news=use_news, horizon_steps=predict_steps,
+        )
 
 
 def _recommendation_from_chart(
@@ -403,6 +422,10 @@ def _ensemble_recommendation(
         float(item["target_price"]) for item in forecasts.values()
     ) / 3.0
 
+    _record_recommendation_charts(
+        symbol, charts, price_source, False, predict_steps
+    )
+
     return {
         "decision": "BUY" if should_buy else "DO NOT BUY",
         "should_buy": should_buy,
@@ -469,6 +492,10 @@ def _model_ensemble_recommendation(
     )
     trade_ranges = _trade_ranges(mean_chart, should_buy)
     should_buy = should_buy and trade_ranges["buy_range_low"] is not None
+
+    _record_recommendation_charts(
+        symbol, charts, price_source, use_news, predict_steps
+    )
 
     return {
         "decision": "BUY" if should_buy else "DO NOT BUY",

@@ -3,17 +3,19 @@ import gzip
 import json
 import struct
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from pathlib import Path
 
 import pandas as pd
+import requests
 from django.test import SimpleTestCase, TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 
 from dashboard import forexsb_service, market_data_service, recommendation_service
 from dashboard import price_export_service
+from dashboard import forecast_track_record
 from dashboard.data_paths import has_bundled_data, list_available_assets, resolve_data_csv
 from dashboard.forms import NameForm, RecommendationForm
 from dashboard.forecaster import (
@@ -30,7 +32,7 @@ from dashboard.news_service import (
 )
 from dashboard.templatetags.price_display import approximate_price
 from dashboard.market_repository import import_context_file, import_news_file, write_news_csv
-from dashboard.models import ContextObservation, NewsArticle
+from dashboard.models import ContextObservation, ForecastRecord, NewsArticle
 from sequence_forecaster import calibrate_return_scales, load_market_data
 
 
@@ -1840,6 +1842,121 @@ class ChartAdapterTests(SimpleTestCase):
 
         self.assertAlmostEqual(frame["Volume"].iloc[0], 15.761)
         self.assertNotIn("Unnamed: 3", frame)
+
+
+class ForecastTrackRecordTests(TestCase):
+    def setUp(self):
+        self.issued = datetime(2026, 10, 30, 10, 30, tzinfo=timezone.utc)
+        self.chart = {
+            "origin_at_utc": "2026-10-30 10:00:00",
+            "target_at_utc": "2026-10-30 12:00:00",
+            "interval_minutes": 60,
+            "actual_prices": [99.0, 100.0],
+            "future_predictions": [103.0, 105.0],
+        }
+
+    def record(self, model="gru", predicted=105.0):
+        chart = {**self.chart, "future_predictions": [103.0, predicted]}
+        return forecast_track_record.record_prediction(
+            "BTC", model, chart, price_source="forexsb", used_news=False,
+            horizon_steps=2, issued_at=self.issued,
+        )
+
+    def test_only_future_forecasts_are_recorded(self):
+        self.assertIsNotNone(self.record())
+        historical = {**self.chart, "target_at_utc": "2026-10-30 10:00:00"}
+        self.assertIsNone(forecast_track_record.record_prediction(
+            "BTC", "lstm", historical, price_source="upload", used_news=True,
+            horizon_steps=2, issued_at=self.issued,
+        ))
+        self.assertEqual(ForecastRecord.objects.count(), 1)
+
+    @patch("dashboard.forecast_track_record.market_data_service.fetch_closed_bars")
+    def test_matching_closed_candle_scores_each_model(self, fetch_bars):
+        self.record("gru", 105.0)
+        self.record("lstm", 95.0)
+        self.record("xgboost", 100.0)
+        closed_at = datetime(2026, 10, 30, 13, 1, tzinfo=timezone.utc)
+        self.assertFalse(forecast_track_record.refresh_due_records(
+            "BTC", now=closed_at - timedelta(minutes=2)
+        ))
+        fetch_bars.assert_not_called()
+
+        fetch_bars.return_value = [
+            {"openTime": "2026-10-30T12:00:00Z", "close": 106.0, "isOpen": True},
+            {"openTime": "2026-10-30T12:00:00Z", "close": 107.0, "isOpen": False},
+        ]
+        self.assertFalse(forecast_track_record.refresh_due_records("BTC", now=closed_at))
+        fetch_bars.assert_called_once()
+        self.assertEqual(ForecastRecord.objects.get(model_name="gru").status, "correct")
+        self.assertEqual(ForecastRecord.objects.get(model_name="lstm").status, "incorrect")
+        self.assertEqual(ForecastRecord.objects.get(model_name="xgboost").status, "no_direction")
+        self.assertEqual(ForecastRecord.objects.get(model_name="gru").actual_close, 107.0)
+        summary = forecast_track_record.track_record_for_symbol("BTC")["summary"]
+        self.assertEqual({item["model_name"]: item["accuracy"] for item in summary}, {
+            "gru": 100.0, "lstm": 0.0, "xgboost": None,
+        })
+
+    @patch("dashboard.forecast_track_record.market_data_service.fetch_closed_bars")
+    def test_unmatched_or_unavailable_prices_remain_pending(self, fetch_bars):
+        self.record()
+        checked_at = datetime(2026, 10, 30, 13, 1, tzinfo=timezone.utc)
+        fetch_bars.return_value = [
+            {"openTime": "2026-10-30T11:00:00Z", "close": 105.0}
+        ]
+        self.assertFalse(forecast_track_record.refresh_due_records("BTC", now=checked_at))
+        self.assertEqual(ForecastRecord.objects.get().status, "pending")
+        fetch_bars.reset_mock()
+        forecast_track_record.refresh_due_records("BTC", now=checked_at + timedelta(minutes=5))
+        fetch_bars.assert_not_called()
+
+        fetch_bars.side_effect = requests.Timeout("provider unavailable")
+        self.assertTrue(forecast_track_record.refresh_due_records(
+            "BTC", now=checked_at + timedelta(minutes=31)
+        ))
+        self.assertEqual(ForecastRecord.objects.get().status, "pending")
+
+    @patch("dashboard.views.forecaster.run_dashboard_forecast")
+    def test_prediction_page_saves_and_displays_record(self, run_forecast):
+        now = datetime.now(timezone.utc)
+        run_forecast.return_value = {
+            **self.chart,
+            "origin_at_utc": (now - timedelta(minutes=30)).isoformat(),
+            "target_at_utc": (now + timedelta(hours=2)).isoformat(),
+            "metrics": {"mae": 1, "rmse": 1, "directional_accuracy_percent": 50,
+                        "bullish_percent": 60, "bearish_percent": 40,
+                        "news_enabled": False},
+        }
+        response = self.client.post(reverse("predict", kwargs={"symbol_name": "BTC"}), {
+            "model_name": "gru", "data_source": "price_only",
+            "price_source": "forexsb", "predict_steps": 2,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ForecastRecord.objects.count(), 1)
+        self.assertContains(response, "prediction track record")
+        self.assertContains(response, "Pending")
+
+        ForecastRecord.objects.update(status=ForecastRecord.Status.CORRECT, actual_close=107.0)
+        response = self.client.get(reverse("predict", kwargs={"symbol_name": "BTC"}))
+        self.assertContains(response, "1 correct")
+        self.assertContains(response, "100.0%")
+
+    def test_ranking_records_each_price_model_component(self):
+        now = datetime.now(timezone.utc)
+        chart = {
+            **self.chart,
+            "origin_at_utc": (now - timedelta(minutes=30)).isoformat(),
+            "target_at_utc": (now + timedelta(hours=2)).isoformat(),
+        }
+        recommendation_service._record_recommendation_charts(
+            "BTC", {"gru": chart, "lstm": chart}, "forexsb", True, 2
+        )
+        self.assertEqual(ForecastRecord.objects.count(), 2)
+        self.assertEqual(
+            set(ForecastRecord.objects.values_list("model_name", flat=True)),
+            {"gru", "lstm"},
+        )
+        self.assertTrue(all(ForecastRecord.objects.values_list("used_news", flat=True)))
 
 
 class NewsDisplayTests(TestCase):

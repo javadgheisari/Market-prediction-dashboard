@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% load static %}
+{% load static price_display %}
 
 {% block content %}
 <main class="container py-4 py-lg-5">
@@ -89,6 +89,9 @@
                 <div class="alert alert-warning mb-0" role="note">Experimental news signal only—not financial advice. It does not consider price, valuation, liquidity, portfolio risk, or your circumstances.</div>
             </div>
             {% elif chart_data %}
+            {% if not recorded_forecast %}
+            <div class="alert alert-warning small" role="status">This result was not added to the live track record because its target candle had already passed or its interval cannot be verified.</div>
+            {% endif %}
             <div class="result-toolbar d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                 <div><div class="card-kicker">Forecast result</div><h2 class="h5 mb-0 mt-1">{{ symbol_name }} outlook</h2></div>
                 <div class="d-flex flex-wrap gap-2">
@@ -190,6 +193,54 @@
             {% endif %}
         </section>
     </div>
+
+    <section id="forecast-track-record" class="app-card mt-4" aria-label="Past forecast track record">
+        <div class="card-header">
+            <div class="card-kicker mb-1">Saved live forecasts</div>
+            <h2 class="h5 mb-1">{{ symbol_name }} prediction track record</h2>
+            <p class="small text-white-50 mb-0">A forecast is correct when its predicted final close and the later observed close move in the same direction from the starting close. Results use the exact matching closed BiQuote candle. Rates group all horizons and data sources for each model. Times are in Asia/Tehran.</p>
+        </div>
+        {% if verification_unavailable %}
+        <div class="alert alert-warning small mx-3 mt-3 mb-0" role="status">Some outcomes could not be checked right now. They remain pending and will be checked on a later visit.</div>
+        {% endif %}
+        {% if track_record.summary %}
+        <div class="card-body pb-2">
+            <div class="row g-2">
+                {% for item in track_record.summary %}
+                <div class="col-sm-6 col-xl-3">
+                    <div class="metric-card track-record-summary">
+                        <span class="metric-label">{{ item.model }}</span>
+                        <span class="metric-value">{% if item.accuracy != None %}{{ item.accuracy|floatformat:1 }}%{% else %}—{% endif %}</span>
+                        <span class="small text-white-50">{{ item.correct }} correct · {{ item.incorrect }} incorrect{% if item.pending %} · {{ item.pending }} pending{% endif %}{% if item.no_direction %} · {{ item.no_direction }} no call{% endif %}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-dark table-striped align-middle mb-0 track-record-table">
+                <thead><tr><th scope="col">Issued</th><th scope="col">Model</th><th scope="col">Target candle</th><th scope="col" class="text-end">Starting close</th><th scope="col" class="text-end">Predicted close</th><th scope="col" class="text-end">Actual close</th><th scope="col">Result</th></tr></thead>
+                <tbody>
+                    {% for record in track_record.recent %}
+                    <tr>
+                        <td class="text-nowrap">{{ record.issued_at }}</td>
+                        <td class="text-nowrap">{{ record.model }}<div class="small text-white-50">{{ record.source }}{% if record.used_news %} + news{% endif %}</div></td>
+                        <td class="text-nowrap">{{ record.target_at }} <small class="text-white-50">({{ record.horizon_steps }} candles)</small></td>
+                        <td class="text-end">{{ record.origin_close|approximate_price }}</td>
+                        <td class="text-end">{{ record.predicted_close|approximate_price }}</td>
+                        <td class="text-end">{% if record.actual_close != None %}{{ record.actual_close|approximate_price }}{% else %}—{% endif %}</td>
+                        <td><span class="track-record-status is-{{ record.status }}">{{ record.status_label }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if track_record.total > 20 %}<p class="small text-white-50 px-3 py-2 mb-0">Showing the latest 20 of {{ track_record.total }} saved forecasts. The model summaries use all saved forecasts.</p>{% endif %}
+        {% else %}
+        <p class="text-white-50 p-4 mb-0">No live forecasts have been recorded for {{ symbol_name }} yet. New eligible price forecasts will appear here after they are made.</p>
+        {% endif %}
+        <p class="small text-white-50 px-3 pb-3 mb-0">Pending means the target candle has not closed or matching price data is not available yet. A flat predicted price is shown as “No directional call” after verification and is excluded from the success rate. News-only decisions have no target candle and are excluded.</p>
+    </section>
 
     {% if asset_news.rows %}
     <section id="news-impact-section" class="app-card mt-4" hidden>

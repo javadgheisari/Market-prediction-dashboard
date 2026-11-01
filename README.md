@@ -371,6 +371,21 @@ Each asset page lists saved headlines with publication time, source, link, and
 the crawler's asset-impact score. Pagination provides access to the complete
 saved history, 25 articles at a time.
 
+Each asset's prediction page also shows a live forecast track record. New price
+forecasts are saved only when their target candle is still in the future. After
+that candle closes, the dashboard checks BiQuote for the exact matching candle
+and marks the forecast correct or incorrect according to the direction of the
+final close relative to the starting close. A missing candle stays pending;
+flat predictions are shown as having no directional call and do not affect the
+success rate. The per-model rates aggregate all saved horizons and data
+sources. Past forecasts made before this feature was added cannot be scored
+retroactively. The separate held-out report card remains a backtest, not a
+record of forecasts issued through the dashboard. News-only decisions have no
+target candle and are excluded. Ranking runs save each price model's forecast
+for the selected assets, including the component models of an ensemble. To
+check pending outcomes without opening the
+dashboard, run `python manage.py settle_forecasts` from `mysite/` on a schedule.
+
 The Django code is configured for local development (`DEBUG=True`) and must not
 be deployed publicly without production settings, a private secret key, and
 appropriate allowed hosts.

@@ -12,6 +12,7 @@ from django.views import View
 
 from dashboard import (
     forecaster,
+    forecast_track_record,
     forexsb_service,
     market_data_service,
     news_service,
@@ -82,12 +83,15 @@ class PredictView(View):
         return normalize_symbol(symbol_name)
 
     def base_context(self, symbol, form, news_page=1):
+        verification_unavailable = forecast_track_record.refresh_due_records(symbol)
         return {
             "symbol_name": symbol,
             "form": form,
             "bundled_available": has_bundled_data(symbol),
             "forexsb_available": forexsb_service.supports_symbol(symbol),
             "asset_news": news_service.load_asset_news(symbol, page=news_page),
+            "track_record": forecast_track_record.track_record_for_symbol(symbol),
+            "verification_unavailable": verification_unavailable,
         }
 
     def get(self, request, symbol_name):
@@ -162,6 +166,12 @@ class PredictView(View):
                         use_news=data_source == "with_news",
                         advanced_config=form.advanced_config(),
                     )
+                recorded = forecast_track_record.record_prediction(
+                    symbol, model_name, chart_data,
+                    price_source=form.cleaned_data["price_source"],
+                    used_news=data_source == "with_news",
+                    horizon_steps=predict_steps,
+                )
                 context.update(
                     {
                         "symbol_name": symbol,
@@ -170,6 +180,8 @@ class PredictView(View):
                         "price_source": form.cleaned_data["price_source"],
                         "predict_steps": predict_steps,
                         "chart_data": chart_data,
+                        "recorded_forecast": recorded is not None,
+                        "track_record": forecast_track_record.track_record_for_symbol(symbol),
                     }
                 )
             except (FileNotFoundError, OSError, RuntimeError, ValueError) as exc:

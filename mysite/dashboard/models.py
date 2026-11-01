@@ -43,3 +43,35 @@ class ContextObservation(models.Model):
             )
         ]
         indexes = [models.Index(fields=["symbol", "feature", "available_at"])]
+
+
+class ForecastRecord(models.Model):
+    """An issued forecast and its later, independently observed outcome."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        CORRECT = "correct", "Correct"
+        INCORRECT = "incorrect", "Incorrect"
+        NO_DIRECTION = "no_direction", "No directional call"
+
+    symbol = models.CharField(max_length=20, db_index=True)
+    model_name = models.CharField(max_length=40)
+    price_source = models.CharField(max_length=20)
+    used_news = models.BooleanField(default=False)
+    issued_at = models.DateTimeField()
+    origin_at = models.DateTimeField()
+    target_at = models.DateTimeField()
+    interval_minutes = models.PositiveIntegerField()
+    horizon_steps = models.PositiveIntegerField()
+    origin_close = models.FloatField()
+    predicted_close = models.FloatField()
+    actual_close = models.FloatField(null=True, blank=True)
+    actual_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+    last_checked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-issued_at", "-pk"]
+        indexes = [models.Index(fields=["symbol", "status", "target_at"])]
