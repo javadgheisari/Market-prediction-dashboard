@@ -1,8 +1,25 @@
 from django.urls import path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
-from dashboard import views
+from dashboard import api_views, views
 
 urlpatterns = [
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path(
+        'api/docs/',
+        SpectacularSwaggerView.as_view(url_name='schema'),
+        name='swagger-ui',
+    ),
+    path(
+        'api/tickers/<str:ticker>/buy-ranking/',
+        api_views.LatestBuyRankingApiView.as_view(),
+        name='api_latest_buy_ranking',
+    ),
+    path(
+        'api/tickers/<str:ticker>/news/',
+        api_views.TickerNewsApiView.as_view(),
+        name='api_ticker_news',
+    ),
     path('', views.DashboardView.as_view(), name='dashboard'),
     path(
         'recommendations/',

@@ -88,3 +88,16 @@ class BuyRankingRecord(models.Model):
 
     class Meta:
         ordering = ["-generated_at", "-pk"]
+
+
+class BuyRankingSuggestion(models.Model):
+    """One ticker's result from a saved buy ranking run."""
+
+    ranking = models.ForeignKey(
+        BuyRankingRecord, on_delete=models.CASCADE, related_name="ticker_suggestions"
+    )
+    symbol = models.CharField(max_length=20, db_index=True)
+    suggestion = models.JSONField()
+
+    class Meta:
+        indexes = [models.Index(fields=["symbol", "ranking"])]

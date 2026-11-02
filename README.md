@@ -390,6 +390,25 @@ for the selected assets, including the component models of an ensemble. To
 check pending outcomes without opening the
 dashboard, run `python manage.py settle_forecasts` from `mysite/` on a schedule.
 
+### Ticker APIs
+
+The dashboard exposes two read-only Django REST Framework JSON endpoints.
+Tickers are case-insensitive.
+
+Interactive Swagger documentation is available at `GET /api/docs/`, and the
+OpenAPI 3 schema is available at `GET /api/schema/`.
+
+- `GET /api/tickers/BTC/buy-ranking/` returns the most recent saved successful
+  price-model ranking for BTC. The response includes its recommendation and
+  aggregate projected percentage path, plus the individual model paths. News-only
+  rankings have no numeric price path and are excluded. A missing projection
+  returns HTTP 404.
+- `GET /api/tickers/BTC/news/?page=1&page_size=25` returns saved BTC news in
+  newest-first order. `page_size` defaults to 25 and is capped at 100. The
+  response includes `total`, `total_pages`, `next_page`, and `previous_page`.
+  An invalid page or page size returns HTTP 400; a page beyond the last returns
+  HTTP 404. A ticker with no news returns an empty first page.
+
 The Django code is configured for local development (`DEBUG=True`) and must not
 be deployed publicly without production settings, a private secret key, and
 appropriate allowed hosts.

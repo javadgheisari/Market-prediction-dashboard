@@ -16,11 +16,11 @@ from dashboard import (
     forexsb_service,
     market_data_service,
     news_service,
+    ranking_repository,
     recommendation_service,
 )
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm, RecommendationForm
-from dashboard.models import BuyRankingRecord
 from dashboard.price_export_service import latest_price_csv
 
 
@@ -251,7 +251,7 @@ class MarketRecommendationsView(View):
             )
             return redirect("dashboard")
 
-        BuyRankingRecord.objects.create(
+        ranking_repository.save_buy_ranking(
             market_name=market_name,
             model_name="news_buy",
             settings={"refresh_news": True},
@@ -318,7 +318,7 @@ class GeneralRecommendationsView(View):
                     use_news=form.cleaned_data["use_news"],
                     refresh_news=form.cleaned_data["refresh_news"],
                 )
-                BuyRankingRecord.objects.create(
+                ranking_repository.save_buy_ranking(
                     market_name=market_name or "Selected assets",
                     model_name=form.cleaned_data["model_name"],
                     settings={

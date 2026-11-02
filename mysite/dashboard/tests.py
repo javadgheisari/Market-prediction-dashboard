@@ -33,7 +33,83 @@ from dashboard.news_service import (
 from dashboard.templatetags.price_display import approximate_price
 from dashboard.market_repository import import_context_file, import_news_file, write_news_csv
 from dashboard.models import ContextObservation, ForecastRecord, NewsArticle
+from dashboard.ranking_repository import save_buy_ranking
 from sequence_forecaster import calibrate_return_scales, load_market_data
+
+
+class TickerApiTests(TestCase):
+    def test_latest_aggregate_uses_the_newest_saved_price_projection(self):
+        save_buy_ranking(
+            market_name="Crypto", model_name="xgboost", settings={},
+            suggestions=[{
+                "symbol": "BTC", "rank": 1, "decision": "BUY",
+                "ranking_score": 2.5,
+                "projection": {
+                    "paths": {"xgboost": [0, 2.0]}, "aggregate": [0, 2.0],
+                },
+            }],
+        )
+        latest = save_buy_ranking(
+            market_name="Crypto", model_name="model_ensemble", settings={"predict_steps": 2},
+            suggestions=[{
+                "symbol": "BTC", "rank": 2, "decision": "DO NOT BUY",
+                "ranking_score": 0.1,
+                "projection": {
+                    "paths": {"xgboost": [0, 1.0], "gru": [0, -1.0]},
+                    "aggregate": [0, 0.0],
+                },
+            }],
+        )
+        save_buy_ranking(
+            market_name="Crypto", model_name="news_buy", settings={},
+            suggestions=[{"symbol": "BTC", "rank": 1, "ranking_score": 0.4}],
+        )
+
+        response = self.client.get(reverse("api_latest_buy_ranking", args=["btc"]))
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["ranking_id"], latest.pk)
+        self.assertEqual(payload["ticker"], "BTC")
+        self.assertEqual(payload["recommendation"]["decision"], "DO NOT BUY")
+        self.assertEqual(payload["aggregate"]["path"], [0, 0.0])
+        self.assertEqual(set(payload["aggregate"]["model_paths"]), {"xgboost", "gru"})
+        self.assertEqual(
+            self.client.get(reverse("api_latest_buy_ranking", args=["ETH"])).status_code,
+            404,
+        )
+
+    def test_news_endpoint_paginates_newest_first_and_validates_pages(self):
+        now = datetime(2026, 11, 2, tzinfo=timezone.utc)
+        for index in range(3):
+            NewsArticle.objects.create(
+                symbol="BTC", article_id=str(index),
+                published_at=now + timedelta(hours=index),
+                headline=f"Headline {index}", source="Example",
+            )
+        NewsArticle.objects.create(
+            symbol="ETH", article_id="other", published_at=now,
+            headline="Different ticker",
+        )
+
+        url = reverse("api_ticker_news", args=["btc"])
+        first = self.client.get(url, {"page_size": 2}).json()
+        self.assertEqual(first["total"], 3)
+        self.assertEqual(first["total_pages"], 2)
+        self.assertEqual(first["next_page"], 2)
+        self.assertEqual(
+            [item["headline"] for item in first["results"]],
+            ["Headline 2", "Headline 1"],
+        )
+        second = self.client.get(url, {"page": 2, "page_size": 2}).json()
+        self.assertEqual(second["previous_page"], 1)
+        self.assertEqual([item["headline"] for item in second["results"]], ["Headline 0"])
+        self.assertEqual(self.client.get(url, {"page": 3, "page_size": 2}).status_code, 404)
+        self.assertEqual(self.client.get(url, {"page_size": 101}).status_code, 400)
+        self.assertEqual(self.client.get(url, {"page": "x"}).status_code, 400)
+        self.assertEqual(
+            self.client.get(reverse("api_ticker_news", args=["XAU"])).json()["results"],
+            [],
+        )
 
 
 class DataPathTests(SimpleTestCase):
