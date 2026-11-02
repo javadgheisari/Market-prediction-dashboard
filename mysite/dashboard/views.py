@@ -20,6 +20,7 @@ from dashboard import (
 )
 from dashboard.data_paths import has_bundled_data, list_available_assets
 from dashboard.forms import NameForm, RecommendationForm
+from dashboard.models import BuyRankingRecord
 from dashboard.price_export_service import latest_price_csv
 
 
@@ -250,6 +251,13 @@ class MarketRecommendationsView(View):
             )
             return redirect("dashboard")
 
+        BuyRankingRecord.objects.create(
+            market_name=market_name,
+            model_name="news_buy",
+            settings={"refresh_news": True},
+            suggestions=result.get("recommendations", []),
+        )
+
         return render(
             request,
             self.template_name,
@@ -268,6 +276,11 @@ class GeneralRecommendationsView(View):
         return list_available_assets()
 
     def render_page(self, request, form, result=None, market_name=None):
+        chart_items = [
+            {"symbol": item["symbol"], "projection": item["projection"]}
+            for item in (result or {}).get("recommendations", [])
+            if item.get("projection")
+        ]
         return render(
             request,
             self.template_name,
@@ -276,6 +289,7 @@ class GeneralRecommendationsView(View):
                 "result": result,
                 "market_name": market_name,
                 "market_names": form.market_names,
+                "chart_items": chart_items,
             },
         )
 
@@ -303,6 +317,17 @@ class GeneralRecommendationsView(View):
                     predict_steps=form.cleaned_data["predict_steps"],
                     use_news=form.cleaned_data["use_news"],
                     refresh_news=form.cleaned_data["refresh_news"],
+                )
+                BuyRankingRecord.objects.create(
+                    market_name=market_name or "Selected assets",
+                    model_name=form.cleaned_data["model_name"],
+                    settings={
+                        "predict_steps": form.cleaned_data["predict_steps"],
+                        "use_news": form.cleaned_data["use_news"],
+                        "refresh_news": form.cleaned_data["refresh_news"],
+                        "symbols": form.selected_symbols(),
+                    },
+                    suggestions=result.get("recommendations", []),
                 )
             except (OSError, RuntimeError, ValueError) as exc:
                 form.add_error(None, str(exc))

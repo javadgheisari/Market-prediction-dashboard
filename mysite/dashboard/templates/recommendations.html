@@ -179,6 +179,27 @@
                         </tbody>
                     </table>
                 </div>
+                {% if chart_items %}
+                <div class="ranking-projection">
+                    <div class="d-flex flex-wrap align-items-end justify-content-between gap-3 mb-2">
+                        <div>
+                            <h4 class="h6 mb-1">Projected future movement</h4>
+                            <p class="small text-white-50 mb-0">Percentage change from the latest price. The aggregate line is the equal-weight mean of the price models shown.</p>
+                        </div>
+                        <div>
+                            <label class="form-label" for="ranking-projection-asset">Asset</label>
+                            <select class="form-select form-select-sm" id="ranking-projection-asset">
+                                {% for item in chart_items %}<option value="{{ forloop.counter0 }}">{{ item.symbol }}</option>{% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    {% if result.mode == 'ensemble' %}<p class="small text-white-50 mb-2">News affects the buy score but has no numeric price path, so this chart averages XGBoost, GRU, and LSTM.</p>{% endif %}
+                    <p class="small text-white-50 mb-1" id="ranking-projection-summary" aria-live="polite"></p>
+                    <div id="ranking-projection-chart" class="ranking-projection-chart" role="img" aria-label="Projected percentage movement for the selected asset"></div>
+                </div>
+                {% elif result.mode == 'news_only' %}
+                <p class="small text-white-50 px-4 py-3 mb-0 border-top">News-only signals do not produce a projected price path to chart.</p>
+                {% endif %}
             </section>
             {% else %}
             <section class="app-card recommendation-empty d-flex align-items-center justify-content-center text-center">
@@ -199,6 +220,7 @@
 
 {{ market_names|json_script:"recommendation-market-names" }}
 {% if result %}{{ result.recommendations|json_script:"recommendation-export-data" }}{% endif %}
+{% if chart_items %}{{ chart_items|json_script:"ranking-projection-data" }}{% endif %}
 {% endblock %}
 
 {% block scripts %}
@@ -251,4 +273,5 @@
     syncNewsOptions();
 </script>
 {% if result %}<script src="{% static 'dashboard/js/recommendation_export.js' %}"></script>{% endif %}
+{% if chart_items %}<script src="{% static 'dashboard/js/ranking_projection.js' %}"></script>{% endif %}
 {% endblock %}

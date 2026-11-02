@@ -1,6 +1,18 @@
 from django.contrib import admin
 
-from dashboard.models import ContextObservation, ForecastRecord, NewsArticle
+from dashboard.models import (
+    BuyRankingRecord,
+    ContextObservation,
+    ForecastRecord,
+    NewsArticle,
+)
+
+
+@admin.register(BuyRankingRecord)
+class BuyRankingRecordAdmin(admin.ModelAdmin):
+    list_display = ("generated_at", "market_name", "model_name")
+    list_filter = ("model_name", "market_name")
+    ordering = ("-generated_at",)
 
 
 @admin.register(NewsArticle)

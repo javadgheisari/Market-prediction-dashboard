@@ -75,3 +75,16 @@ class ForecastRecord(models.Model):
     class Meta:
         ordering = ["-issued_at", "-pk"]
         indexes = [models.Index(fields=["symbol", "status", "target_at"])]
+
+
+class BuyRankingRecord(models.Model):
+    """A generated buy ranking and the suggestions shown for that run."""
+
+    generated_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    market_name = models.CharField(max_length=120)
+    model_name = models.CharField(max_length=40)
+    settings = models.JSONField(default=dict, blank=True)
+    suggestions = models.JSONField(default=list)
+
+    class Meta:
+        ordering = ["-generated_at", "-pk"]

@@ -218,6 +218,44 @@ def _mean_forecast_chart(
     }
 
 
+def _projection_from_charts(
+    charts: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Express each model's future path as a move from its last price."""
+    if not charts:
+        return None
+    path_length = min(
+        len(chart.get("future_predictions") or []) for chart in charts.values()
+    )
+    if not path_length:
+        return None
+
+    paths = {}
+    try:
+        for model_name, chart in charts.items():
+            current = float(chart["actual_prices"][-1])
+            if not math.isfinite(current) or current <= 0:
+                return None
+            prices = [
+                float(price)
+                for price in chart["future_predictions"][:path_length]
+            ]
+            if any(not math.isfinite(price) or price <= 0 for price in prices):
+                return None
+            paths[model_name] = [
+                0.0,
+                *(round((price / current - 1.0) * 100.0, 4) for price in prices),
+            ]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+    aggregate = [
+        round(sum(path[step] for path in paths.values()) / len(paths), 4)
+        for step in range(path_length + 1)
+    ]
+    return {"paths": paths, "aggregate": aggregate}
+
+
 def _forecast_recommendation(
     symbol: str,
     model_name: str,
@@ -235,6 +273,7 @@ def _forecast_recommendation(
         advanced_config=DEFAULT_ADVANCED_CONFIG.copy(),
     )
     recommendation = _recommendation_from_chart(chart, price_source, use_news)
+    recommendation["projection"] = _projection_from_charts({model_name: chart})
     _record_recommendation_charts(
         symbol, {model_name: chart}, price_source, use_news, predict_steps
     )
@@ -448,6 +487,7 @@ def _ensemble_recommendation(
         "news_enabled": True,
         **trade_ranges,
         **trend_details,
+        "projection": _projection_from_charts(charts),
     }
 
 
@@ -541,6 +581,7 @@ def _model_ensemble_recommendation(
         "news_enabled": use_news,
         **trade_ranges,
         **trend_details,
+        "projection": _projection_from_charts(charts),
     }
 
 

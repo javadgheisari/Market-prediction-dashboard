@@ -354,6 +354,10 @@ sustained model-path trend and its estimated duration. The duration ends at the
 first meaningful forecast reversal; when none appears, it covers the full
 selected forecast horizon. These values are model estimates rather than
 guaranteed price targets or timing.
+Below the buy ranking table, a chart shows each price model's projected move
+from the latest price for a selected asset and the equal-weight mean path when
+multiple price models are used. Select another ranked asset to inspect its
+projection. News affects the ranking score but has no numeric price path.
 For forecast-based BUY rows, the ranking also shows approximate buy and sell
 price ranges. The buy range is the lower-to-upper forecast band for the next
 candle; the sell range is the band at the highest projected candle within the
